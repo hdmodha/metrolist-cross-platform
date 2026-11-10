@@ -11,7 +11,8 @@ import {
   Repeat1,
 } from 'lucide-react';
 import type { MetrolistTrack } from '../data/metrolistData';
-import { formatDurationMs, type RepeatMode } from '../utils/metrolistCore';
+import { formatDurationMs } from '../utils/metrolistCore';
+import type { RepeatMode } from '../player/queueRules';
 
 interface QueueDrawerProps {
   activeTab: 'QUEUE' | 'EQ';

@@ -33,8 +33,8 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 # Install dependencies
 npm install
 
-# Run unit tests (InnerTube, Recommendations & Security checks)
-npx tsx --test src/utils/metrolistCore.test.ts
+# Run all unit tests (player core, InnerTube, persistence & security checks)
+npm test
 
 # Start development server (Express + Vite on http://localhost:3000)
 npm run dev

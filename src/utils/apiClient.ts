@@ -10,15 +10,44 @@
  */
 import {
   INNERTUBE_ENDPOINT_URLS,
-  fetchInnerTubeRadioTracks,
+  fetchInnerTubeRadioPage,
   isValidYouTubeVideoId,
+  sanitizeRadioContinuation,
   searchInnerTubeTracks,
   type InnerTubeParsedTrack,
   type InnerTubeTransport,
 } from './metrolistCore';
+import { LruTtlCache } from './lruCache';
 
 const REQUEST_TIMEOUT_MS = 12000;
 const DEFAULT_RADIO_SEED_VIDEO_ID = 'a5uQMwRMHcs';
+
+/** Repeated searches (and artist-chip switches) are answered instantly from memory. */
+const searchCache = new LruTtlCache<InnerTubeParsedTrack[]>({ maxEntries: 30, ttlMs: 5 * 60 * 1000 });
+
+/** One page of YouTube Music radio. `continuation` is the token of the next page (`null` = exhausted). */
+export interface RadioPage {
+  tracks: InnerTubeParsedTrack[];
+  continuation: string | null;
+}
+
+/** The first radio page for a track, plus the seed video the radio was actually built from. */
+export interface RecommendationsPage extends RadioPage {
+  seedVideoId: string;
+}
+
+interface BackendRadioPayload {
+  seedVideoId?: unknown;
+  tracks?: unknown;
+  continuation?: unknown;
+}
+
+function readBackendRadioPage(data: BackendRadioPayload): RadioPage {
+  return {
+    tracks: Array.isArray(data.tracks) ? (data.tracks as InnerTubeParsedTrack[]) : [],
+    continuation: sanitizeRadioContinuation(data.continuation) || null,
+  };
+}
 
 interface NativeHttpResponse {
   status?: number;
@@ -161,7 +190,10 @@ async function backendThenDirect<T>(
   return direct();
 }
 
-/** Live YouTube Music search. Resolves with `[]` when nothing matches; rejects on network failure. */
+/**
+ * Live YouTube Music search. Resolves with `[]` when nothing matches; rejects on network failure.
+ * Non-empty answers are cached for a few minutes; empty and failed ones never are.
+ */
 export async function searchTracks(
   query: string,
   signal?: AbortSignal
@@ -169,7 +201,11 @@ export async function searchTracks(
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  return backendThenDirect(
+  const cacheKey = trimmed.toLowerCase();
+  const cached = searchCache.get(cacheKey, Date.now());
+  if (cached) return cached;
+
+  const tracks = await backendThenDirect(
     signal,
     async () => {
       const data = await fetchBackendJson<{ tracks?: InnerTubeParsedTrack[] }>(
@@ -180,26 +216,32 @@ export async function searchTracks(
     },
     () => searchInnerTubeTracks(directInnerTubeTransport, trimmed)
   );
+  if (tracks.length > 0) searchCache.set(cacheKey, tracks, Date.now());
+  return tracks;
 }
 
-/** YouTube Music radio ("Up Next") recommendations for a seed track. */
+/** YouTube Music radio ("Up Next") recommendations for a seed track: the first radio page. */
 export async function fetchRecommendations(
   seed: { videoId: string; title: string; artist: string },
   signal?: AbortSignal
-): Promise<InnerTubeParsedTrack[]> {
+): Promise<RecommendationsPage> {
+  const validSeed = isValidYouTubeVideoId(seed.videoId) ? seed.videoId : '';
   return backendThenDirect(
     signal,
     async () => {
-      const data = await fetchBackendJson<{ tracks?: InnerTubeParsedTrack[] }>(
+      const data = await fetchBackendJson<BackendRadioPayload>(
         `/api/innertube/recommendations?videoId=${encodeURIComponent(
           seed.videoId
         )}&title=${encodeURIComponent(seed.title)}&artist=${encodeURIComponent(seed.artist)}`,
         signal
       );
-      return Array.isArray(data.tracks) ? data.tracks : [];
+      const seedVideoId = isValidYouTubeVideoId(data.seedVideoId)
+        ? String(data.seedVideoId)
+        : validSeed;
+      return { ...readBackendRadioPage(data), seedVideoId };
     },
     async () => {
-      let seedVideoId = isValidYouTubeVideoId(seed.videoId) ? seed.videoId : '';
+      let seedVideoId = validSeed;
       if (!seedVideoId) {
         const matches = await searchInnerTubeTracks(
           directInnerTubeTransport,
@@ -207,7 +249,32 @@ export async function fetchRecommendations(
         ).catch(() => []);
         seedVideoId = matches[0]?.videoId || DEFAULT_RADIO_SEED_VIDEO_ID;
       }
-      return fetchInnerTubeRadioTracks(directInnerTubeTransport, seedVideoId);
+      const page = await fetchInnerTubeRadioPage(directInnerTubeTransport, seedVideoId);
+      return { ...page, seedVideoId };
     }
+  );
+}
+
+/** The next page of a radio started by `fetchRecommendations` (Metrolist-style endless radio). */
+export async function fetchRadioContinuation(
+  request: { seedVideoId: string; continuation: string },
+  signal?: AbortSignal
+): Promise<RadioPage> {
+  const continuation = sanitizeRadioContinuation(request.continuation);
+  if (!isValidYouTubeVideoId(request.seedVideoId) || !continuation) {
+    throw new Error('Invalid radio continuation request.');
+  }
+  return backendThenDirect(
+    signal,
+    async () =>
+      readBackendRadioPage(
+        await fetchBackendJson<BackendRadioPayload>(
+          `/api/innertube/recommendations?videoId=${encodeURIComponent(
+            request.seedVideoId
+          )}&continuation=${encodeURIComponent(continuation)}`,
+          signal
+        )
+      ),
+    () => fetchInnerTubeRadioPage(directInnerTubeTransport, request.seedVideoId, continuation)
   );
 }

@@ -31,7 +31,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Run unit tests & security checks
-        run: npx tsx --test src/utils/metrolistCore.test.ts
+        run: npm test
 
       - name: Run TypeScript typecheck
         run: npm run lint

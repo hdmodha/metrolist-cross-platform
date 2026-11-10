@@ -14,9 +14,9 @@ This file provides essential architectural context, commands, data flows, known 
   ```bash
   npm run lint
   ```
-- **Run Pure Logic & Security Unit Tests (`node:test`)**:
+- **Run All Unit Tests (`node:test` via tsx, every `src/**/*.test.ts`)**:
   ```bash
-  npx tsx --test src/utils/metrolistCore.test.ts
+  npm test
   ```
 - **Production Frontend Build (`dist/`)**:
   ```bash
@@ -44,12 +44,17 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
 │   │   ├── PlayerLibraryView.tsx          # Main Spotify-style view: Hero card, Live YT Search, Up Next Radio, Library
 │   │   ├── QueueDrawer.tsx                # Right drawer: Up Next Queue manager, 5-Band Parametric EQ
 │   │   └── YouTubeStreamBridge.tsx        # YouTube IFrame Player API bridge (hidden; revealed only when autoplay needs a tap)
+│   ├── player/                            # Pure, unit-tested player core (not wired into the UI yet)
+│   │   ├── playerCore.ts                  # Normalized PlayerState + playerReducer + selectors (queue, radio, failures, network)
+│   │   ├── queueRules.ts                  # Queue rules: next index, add to queue / play next, play-now queue, radio merge
+│   │   └── retryPolicy.ts                 # Network back-off: 3 s · 2^attempt, capped at 30 s, 5 retries
 │   └── utils/
-│       ├── metrolistCore.ts               # Pure logic: InnerTube parsers + shared request layer, song search terms, queue rules, sanitizers
-│       ├── metrolistCore.test.ts          # Automated unit test suite (node:test)
-│       ├── apiClient.ts                   # Client network layer: `/api/*` backend, `VITE_API_BASE_URL`, native-shell direct InnerTube
-│       ├── persistence.ts                 # Validated localStorage persistence (library, likes, volume, shuffle/repeat, EQ)
+│       ├── metrolistCore.ts               # Pure logic: InnerTube parsers (incl. radio pages) + shared request layer, song search terms, sanitizers
+│       ├── apiClient.ts                   # Client network layer: `/api/*` backend, `VITE_API_BASE_URL`, native-shell direct InnerTube, search cache
+│       ├── lruCache.ts                    # Pure LRU + TTL cache (time injected)
+│       ├── persistence.ts                 # Validated localStorage persistence (library, prefs, queue) + PlayerState mappers
 │       └── webAudioSynth.ts               # Web Audio API 5-band BiquadFilter EQ + real-time FFT spectrum analyzer
+│   (every module has its `*.test.ts` next to it; `npm test` runs them all)
 └── .github/workflows/
     ├── deploy-pages.yml                   # CI Build, TypeScript check, and unit test workflow on push/PR
     └── release-native-builds.yml          # Multi-OS release pipeline (Android APK, iOS, macOS, Windows, Web)
@@ -68,15 +73,20 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
 2. **YouTube Music Recommendations / Radio (`GET /api/innertube/recommendations?videoId=...`)**:
    - Whenever the active track id changes in `src/App.tsx`, it calls `fetchRecommendations()` (`/api/innertube/recommendations`).
    - `server.ts` calls `https://music.youtube.com/youtubei/v1/next` with playlist `RDAMVM${seedVideoId}`.
-   - `parseInnerTubeWatchNextResponse` extracts recommended tracks (live streams and >20 min mixes are dropped). When `autoplayRadio` is `ON`, `mergeRadioIntoQueue` appends them **only when fewer than 3 songs are left** — it never replaces the queue, so hand-queued songs survive.
+   - `parseInnerTubeWatchNextPage` extracts recommended tracks (live streams and >20 min mixes are dropped) and the radio continuation token (`playlistPanelRenderer.continuations[0].nextRadioContinuationData.continuation`); the route answers `{ tracks, seedVideoId, continuation }`. When `autoplayRadio` is `ON`, `mergeRadioIntoQueue` appends them **only when fewer than 3 songs are left** (the new player core: ≤ 5) — it never replaces the queue, so hand-queued songs survive.
+   - **Radio continuation**: the same route with `&continuation=<token>` (≤ 1024 chars of `[A-Za-z0-9_\-%=.]`, checked by the linear `sanitizeRadioContinuation`; the seed must be a valid video id) re-sends the WatchNext body plus the URL-decoded token. That answer repeats the first page under `contents`, so only `continuationContents.playlistPanelContinuation` is parsed. Client: `fetchRadioContinuation()` in `apiClient.ts` (backend and native-shell paths).
 
 3. **Full-Song Audio Playback (`YouTubeStreamBridge.tsx` vs `audioEngine.ts`)**:
    - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge alone drives `currentTimeMs` (the clock never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and updates `durationMs` if the real stream duration exceeds 30s. Player errors trigger a search for another upload of the same song (terms from `deriveSongSearchTerms`), then a skip; they never fall back to the synth.
    - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`) and App handlers through `latest.current` (`App.tsx`). The player is created once; capturing props at mount made "track ended" act on a stale queue.
    - **Local Studio Synth seed tracks (`isLiveInnerTube: false`)**: Synthesized in real time via `src/utils/audioEngine.ts` using Web Audio oscillators + 5-band parametric `BiquadFilterNode` chain.
 
-4. **Queue rules (`pickNextQueueIndex`, `insertIntoQueueAfterCurrent`, `buildPlayNowQueue`, `mergeRadioIntoQueue` in `metrolistCore.ts`)**:
-   - Pure and unit-tested. Next / Previous / track-ended / repeat (`OFF | ALL | ONE`) / shuffle all go through `skipTrack()` in `App.tsx`. Invariant: the playing track is always in `queue`.
+4. **Queue rules (`pickNextQueueIndex`, `insertIntoQueueAfterCurrent`, `insertIntoQueueAsNext`, `buildPlayNowQueue`, `mergeRadioIntoQueue` in `src/player/queueRules.ts`)**:
+   - Pure and unit-tested. Today Next / Previous / track-ended / repeat (`OFF | ALL | ONE`) / shuffle go through `skipTrack()` in `App.tsx`. Invariant: the playing track is always in `queue`.
+
+5. **Player core (`src/player/playerCore.ts`, not wired into the UI yet)**:
+   - `playerReducer(state, action)` over a normalized `PlayerState` (`tracksById` + id lists) plus selectors (`selectActiveTrack`, `selectQueueTracks`, `selectRadioContinuationRequest`, ...). No timers, clock or `Math.random`: randomness and positions arrive in action payloads. No-op actions return the same object; every change re-establishes the invariants (a seeded property test runs thousands of random action sequences).
+   - Saving / restoring the queue goes through `toPersistedState` / `fromPersistedState` (`persistence.ts`, same `metrolist.player.v1` key, additive fields); a restore is always paused.
 
 ---
 

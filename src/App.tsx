@@ -19,15 +19,17 @@ import {
   type MetrolistTrack,
 } from './data/metrolistData';
 import {
-  buildPlayNowQueue,
   deriveSongSearchTerms,
   formatDurationMs,
+  type InnerTubeParsedTrack,
+} from './utils/metrolistCore';
+import {
+  buildPlayNowQueue,
   insertIntoQueueAfterCurrent,
   mergeRadioIntoQueue,
   pickNextQueueIndex,
-  type InnerTubeParsedTrack,
   type RepeatMode,
-} from './utils/metrolistCore';
+} from './player/queueRules';
 import { fetchRecommendations, searchTracks } from './utils/apiClient';
 import { loadPlayerState, savePlayerState } from './utils/persistence';
 import { sharedAudioEngine } from './utils/webAudioSynth';
@@ -307,7 +309,7 @@ export default function App() {
       { videoId: seed.videoId, title: seed.title, artist: seed.artist },
       controller.signal
     )
-      .then((recs) => {
+      .then(({ tracks: recs }) => {
         if (controller.signal.aborted) return;
         const usable = recs.filter((r) => r.videoId !== seed.videoId);
         if (usable.length === 0) {

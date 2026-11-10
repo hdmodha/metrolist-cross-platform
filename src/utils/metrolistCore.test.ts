@@ -59,7 +59,7 @@ test('InnerTube WEB_REMIX search parser extracts videoId, title, artist, album, 
 });
 
 test('InnerTube RDAMVM WatchNext recommendation parser extracts YouTube Music Up Next recommendations', async () => {
-  const { parseInnerTubeWatchNextResponse } = await import('./metrolistCore');
+  const { parseInnerTubeWatchNextPage } = await import('./metrolistCore');
   const mockWatchNextTree = {
     contents: {
       singleColumnMusicWatchNextResultsRenderer: {
@@ -88,7 +88,7 @@ test('InnerTube RDAMVM WatchNext recommendation parser extracts YouTube Music Up
     },
   };
 
-  const recommendations = parseInnerTubeWatchNextResponse(mockWatchNextTree, 'a5uQMwRMHcs');
+  const { tracks: recommendations } = parseInnerTubeWatchNextPage(mockWatchNextTree, 'a5uQMwRMHcs');
   assert.equal(recommendations.length, 1);
   assert.equal(recommendations[0].videoId, 'qFLhGq0060w');
   assert.equal(recommendations[0].title, 'I Feel It Coming ft. Daft Punk');
@@ -171,7 +171,7 @@ test('InnerTube search parser understands the "Videos" shelf and drops podcasts,
 });
 
 test('WatchNext parser skips live streams and over-long mixes in radio recommendations', async () => {
-  const { parseInnerTubeWatchNextResponse } = await import('./metrolistCore');
+  const { parseInnerTubeWatchNextPage } = await import('./metrolistCore');
   const item = (videoId: string, length: string) => ({
     playlistPanelVideoRenderer: {
       videoId,
@@ -181,7 +181,7 @@ test('WatchNext parser skips live streams and over-long mixes in radio recommend
       lengthText: { runs: [{ text: length }] },
     },
   });
-  const recs = parseInnerTubeWatchNextResponse({
+  const { tracks: recs } = parseInnerTubeWatchNextPage({
     contents: [item('5qap5aO4i9A', '20,843:43:51'), item('bbbbbbbbbbb', '1:30:00'), item('ccccccccccc', '3:34')],
   });
   assert.deepEqual(recs.map((r) => r.videoId), ['ccccccccccc']);
@@ -236,99 +236,143 @@ test('Song search terms are derived from YouTube-style video titles', async () =
   assert.equal(deriveSongSearchTerms('Nightcall', 'Kavinsky - Topic').artistName, 'Kavinsky');
 });
 
-test('Queue rules: next / previous, repeat modes, shuffle and end of queue', async () => {
-  const { pickNextQueueIndex } = await import('./metrolistCore');
-  const base = { queueLength: 4, shuffle: false, repeatMode: 'OFF' as const };
 
-  // Natural end of a song
-  assert.equal(pickNextQueueIndex({ ...base, currentIndex: 1, direction: 1, userInitiated: false }), 2);
-  assert.equal(pickNextQueueIndex({ ...base, currentIndex: 3, direction: 1, userInitiated: false }), -1);
-  assert.equal(
-    pickNextQueueIndex({ ...base, repeatMode: 'ALL', currentIndex: 3, direction: 1, userInitiated: false }),
-    0
-  );
-  assert.equal(
-    pickNextQueueIndex({ ...base, repeatMode: 'ONE', currentIndex: 2, direction: 1, userInitiated: false }),
-    2
-  );
+/* ---------------------------------- Radio continuation pages ---------------------------------- */
 
-  // Pressing Next always moves on, even with repeat-one
-  assert.equal(
-    pickNextQueueIndex({ ...base, repeatMode: 'ONE', currentIndex: 2, direction: 1, userInitiated: true }),
-    3
-  );
-  assert.equal(pickNextQueueIndex({ ...base, currentIndex: 0, direction: -1, userInitiated: true }), 0);
-  assert.equal(
-    pickNextQueueIndex({ ...base, repeatMode: 'ALL', currentIndex: 0, direction: -1, userInitiated: true }),
-    3
-  );
+function panelItem(videoId: string, title = `Song ${videoId}`) {
+  return {
+    playlistPanelVideoRenderer: {
+      videoId,
+      title: { runs: [{ text: title }] },
+      shortBylineText: { runs: [{ text: 'Artist' }] },
+      lengthText: { runs: [{ text: '3:30' }] },
+    },
+  };
+}
 
-  // Shuffle never picks the song that is already playing (the old code could, with 2 songs)
-  for (const queueLength of [2, 3, 7]) {
-    for (const r of [0, 0.25, 0.5, 0.999]) {
-      const idx = pickNextQueueIndex({
-        queueLength,
-        currentIndex: 1,
-        direction: 1,
-        shuffle: true,
-        repeatMode: 'OFF',
-        userInitiated: true,
-        random: () => r,
-      });
-      assert.notEqual(idx, 1);
-      assert.ok(idx >= 0 && idx < queueLength);
-    }
-  }
+const radioToken = (n: number) => `CBkSJRILc2VlZFZpZGVvMDE${n}%3D`;
 
-  // The playing song was removed from the queue / empty queue
-  assert.equal(pickNextQueueIndex({ ...base, currentIndex: -1, direction: 1, userInitiated: false }), 0);
-  assert.equal(
-    pickNextQueueIndex({ ...base, queueLength: 0, currentIndex: -1, direction: 1, userInitiated: true }),
-    -1
+/** First WatchNext page, shaped like the live `RDAMVM` answer. */
+function firstRadioPage(videoIds: string[], token: string | null) {
+  return {
+    contents: {
+      singleColumnMusicWatchNextResultsRenderer: {
+        tabbedRenderer: {
+          watchNextTabbedResultsRenderer: {
+            tabs: [
+              {
+                tabRenderer: {
+                  content: {
+                    musicQueueRenderer: {
+                      content: {
+                        playlistPanelRenderer: {
+                          contents: videoIds.map((id) => panelItem(id)),
+                          ...(token
+                            ? { continuations: [{ nextRadioContinuationData: { continuation: token } }] }
+                            : {}),
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+test('WatchNext page parser returns the tracks and the radio continuation token of a first page', async () => {
+  const { parseInnerTubeWatchNextPage } = await import('./metrolistCore');
+  const page = parseInnerTubeWatchNextPage(
+    firstRadioPage(['seedVideo01', 'aaaaaaaaaa1', 'aaaaaaaaaa2'], radioToken(1)),
+    'seedVideo01'
   );
-  assert.equal(
-    pickNextQueueIndex({ ...base, queueLength: 1, currentIndex: 0, direction: 1, userInitiated: false }),
-    -1
-  );
+  assert.deepEqual(page.tracks.map((t) => t.videoId), ['aaaaaaaaaa1', 'aaaaaaaaaa2']);
+  assert.equal(page.continuation, radioToken(1));
 });
 
-test('Queue rules: add-to-queue order, play-now context and radio top-up keep hand-queued songs', async () => {
-  const { insertIntoQueueAfterCurrent, buildPlayNowQueue, mergeRadioIntoQueue } = await import(
-    './metrolistCore'
+test('WatchNext page parser reads ONLY continuationContents of a continuation answer', async () => {
+  const { parseInnerTubeWatchNextPage } = await import('./metrolistCore');
+  // The live service repeats the first page under `contents` next to the continuation page
+  const answer = {
+    ...firstRadioPage(['seedVideo01', 'aaaaaaaaaa1', 'aaaaaaaaaa2'], radioToken(1)),
+    continuationContents: {
+      playlistPanelContinuation: {
+        contents: [panelItem('bbbbbbbbbb1'), panelItem('aaaaaaaaaa1'), panelItem('bbbbbbbbbb2')],
+        continuations: [{ nextRadioContinuationData: { continuation: radioToken(2) } }],
+      },
+    },
+  };
+  const page = parseInnerTubeWatchNextPage(answer, 'seedVideo01');
+  assert.deepEqual(page.tracks.map((t) => t.videoId), ['bbbbbbbbbb1', 'aaaaaaaaaa1', 'bbbbbbbbbb2']);
+  assert.equal(page.continuation, radioToken(2));
+});
+
+test('WatchNext page parser reports an exhausted radio as a null continuation', async () => {
+  const { parseInnerTubeWatchNextPage } = await import('./metrolistCore');
+  assert.equal(parseInnerTubeWatchNextPage(firstRadioPage(['aaaaaaaaaa1'], null)).continuation, null);
+  assert.equal(
+    parseInnerTubeWatchNextPage({
+      continuationContents: { playlistPanelContinuation: { contents: [panelItem('bbbbbbbbbb1')] } },
+    }).continuation,
+    null
   );
-  const t = (id: string) => ({ id });
-  const ids = (list: Array<{ id: string }>) => list.map((x) => x.id).join(',');
+  // Unexpected / malicious tokens are dropped rather than forwarded
+  assert.equal(parseInnerTubeWatchNextPage(firstRadioPage([], 'bad token<script>')).continuation, null);
+  assert.deepEqual(parseInnerTubeWatchNextPage(null), { tracks: [], continuation: null });
+});
 
-  // Manual picks play right after the current song, in the order they were added, before radio picks
-  let queue = [t('now'), t('radio1'), t('radio2')];
-  const manual = new Set<string>();
-  queue = insertIntoQueueAfterCurrent(queue, 'now', t('a'), manual);
-  manual.add('a');
-  queue = insertIntoQueueAfterCurrent(queue, 'now', t('b'), manual);
-  manual.add('b');
-  assert.equal(ids(queue), 'now,a,b,radio1,radio2');
-  // Queueing a song that is already further down moves it up instead of duplicating it
-  queue = insertIntoQueueAfterCurrent(queue, 'now', t('radio2'), manual);
-  assert.equal(ids(queue), 'now,a,b,radio2,radio1');
-  assert.equal(insertIntoQueueAfterCurrent(queue, 'now', t('now'), manual), queue);
+test('Radio continuation tokens are validated with a linear character check', async () => {
+  const { sanitizeRadioContinuation } = await import('./metrolistCore');
+  assert.equal(sanitizeRadioContinuation(radioToken(1)), radioToken(1));
+  assert.equal(sanitizeRadioContinuation('abc-_.%=XYZ019'), 'abc-_.%=XYZ019');
+  assert.equal(sanitizeRadioContinuation(''), '');
+  assert.equal(sanitizeRadioContinuation('a b'), '');
+  assert.equal(sanitizeRadioContinuation('a/b+c'), '');
+  assert.equal(sanitizeRadioContinuation('x'.repeat(1024)), 'x'.repeat(1024));
+  assert.equal(sanitizeRadioContinuation('x'.repeat(1025)), '');
+  assert.equal(sanitizeRadioContinuation(42), '');
+  assert.equal(sanitizeRadioContinuation(['abc']), '');
+});
 
-  // Playing a new song keeps history + manual picks and drops stale automatic picks
-  const playNow = buildPlayNowQueue(
-    [t('old1'), t('now'), t('a'), t('radio1')],
-    'now',
-    t('picked'),
-    new Set(['a']),
-    [t('ctx1'), t('a'), t('ctx2')]
-  );
-  assert.equal(ids(playNow), 'old1,now,picked,a,ctx1,ctx2');
-  // Nothing has been played yet: no history is kept
-  assert.equal(ids(buildPlayNowQueue([t('seed1'), t('seed2')], null, t('picked'), new Set())), 'picked');
+test('WatchNext request body carries the URL-decoded continuation token only when paging', async () => {
+  const { buildInnerTubeNextBody } = await import('./metrolistCore');
+  const first = buildInnerTubeNextBody('seedVideo01');
+  assert.equal(first.playlistId, 'RDAMVMseedVideo01');
+  assert.equal(first.videoId, 'seedVideo01');
+  assert.equal('continuation' in first, false);
 
-  // Radio only tops up a queue that is about to run dry, and never duplicates
-  const full = [t('now'), t('a'), t('b'), t('c')];
-  assert.equal(mergeRadioIntoQueue(full, 'now', [t('r1')]), full);
-  const low = [t('played'), t('now'), t('a')];
-  assert.equal(ids(mergeRadioIntoQueue(low, 'now', [t('a'), t('r1'), t('now'), t('r2')])), 'played,now,a,r1,r2');
-  // The current song must be in the queue for a top-up to make sense
-  assert.equal(mergeRadioIntoQueue(low, 'missing', [t('r1')]), low);
+  const next = buildInnerTubeNextBody('seedVideo01', 'CBkSAbc%3D%3D');
+  assert.equal(next.continuation, 'CBkSAbc==');
+  assert.equal(next.playlistId, 'RDAMVMseedVideo01');
+  // A malformed escape is sent as-is instead of throwing
+  assert.equal(buildInnerTubeNextBody('seedVideo01', 'abc%E0%A4%A').continuation, 'abc%E0%A4%A');
+});
+
+test('Radio page fetcher sends the right body and parses tracks and the next token', async () => {
+  const { fetchInnerTubeRadioPage } = await import('./metrolistCore');
+  const bodies: Array<Record<string, unknown>> = [];
+  const transport = async (endpoint: string, body: Record<string, unknown>) => {
+    assert.equal(endpoint, 'next');
+    bodies.push(body);
+    if (body.continuation) {
+      return {
+        continuationContents: {
+          playlistPanelContinuation: { contents: [panelItem('bbbbbbbbbb1'), panelItem('seedVideo01')] },
+        },
+      };
+    }
+    return firstRadioPage(['seedVideo01', 'aaaaaaaaaa1'], radioToken(1));
+  };
+  const first = await fetchInnerTubeRadioPage(transport, 'seedVideo01');
+  assert.deepEqual(first.tracks.map((t) => t.videoId), ['aaaaaaaaaa1']);
+  assert.equal(first.continuation, radioToken(1));
+
+  const second = await fetchInnerTubeRadioPage(transport, 'seedVideo01', first.continuation!);
+  assert.deepEqual(second.tracks.map((t) => t.videoId), ['bbbbbbbbbb1']);
+  assert.equal(second.continuation, null);
+  assert.equal(bodies[1].continuation, decodeURIComponent(radioToken(1)));
 });

@@ -180,16 +180,42 @@ export function parseInnerTubeSearchResponse(rawJson: unknown): InnerTubeParsedT
   return results;
 }
 
-/**
- * Pure parser for YouTube Music `youtubei/v1/next` (`playlistId: "RDAMVM" + videoId`)
- * algorithmic radio & "Up Next" song recommendations (`playlistPanelVideoRenderer`).
- */
-export function parseInnerTubeWatchNextResponse(
-  rawJson: unknown,
-  excludeVideoId?: string
-): InnerTubeParsedTrack[] {
-  const renderers: Array<Record<string, unknown>> = [];
+/** One page of an `RDAMVM` radio: its tracks and the token of the next page (`null` = exhausted). */
+export interface InnerTubeRadioPage {
+  tracks: InnerTubeParsedTrack[];
+  continuation: string | null;
+}
 
+/** Longest radio continuation token accepted from YouTube Music or from API callers. */
+export const MAX_RADIO_CONTINUATION_LENGTH = 1024;
+
+/**
+ * Validates a radio continuation token in linear time (no regular expression): a string of at most
+ * 1024 characters drawn only from `[A-Za-z0-9_\-%=.]`. Returns `''` for anything else.
+ */
+export function sanitizeRadioContinuation(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_RADIO_CONTINUATION_LENGTH) {
+    return '';
+  }
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    const isAlphaNum =
+      (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    const isAllowedSymbol =
+      code === 95 /* _ */ || code === 45 /* - */ || code === 37 /* % */ || code === 61 /* = */ || code === 46; /* . */
+    if (!isAlphaNum && !isAllowedSymbol) return '';
+  }
+  return raw;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function collectPanelVideoRenderers(root: unknown): Array<Record<string, unknown>> {
+  const renderers: Array<Record<string, unknown>> = [];
   function walk(node: unknown) {
     if (!node || typeof node !== 'object') return;
     const rec = node as Record<string, unknown>;
@@ -201,9 +227,42 @@ export function parseInnerTubeWatchNextResponse(
       walk(val);
     }
   }
+  walk(root);
+  return renderers;
+}
 
-  walk(rawJson);
+/** Depth-bounded search for the first `playlistPanelRenderer` of a first WatchNext page. */
+function findPlaylistPanelRenderer(root: unknown): Record<string, unknown> | null {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop()!;
+    const rec = asRecord(value);
+    if (!rec && !Array.isArray(value)) continue;
+    if (depth > 16) continue;
+    if (rec) {
+      const panel = asRecord(rec.playlistPanelRenderer);
+      if (panel) return panel;
+    }
+    const children = Array.isArray(value) ? value : Object.values(rec!);
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push({ value: children[i], depth: depth + 1 });
+    }
+  }
+  return null;
+}
 
+/** `continuations[0].nextRadioContinuationData.continuation` of a playlist panel, validated. */
+function readNextRadioContinuation(panel: Record<string, unknown> | null): string | null {
+  const continuations = panel?.continuations;
+  if (!Array.isArray(continuations)) return null;
+  const data = asRecord(asRecord(continuations[0])?.nextRadioContinuationData);
+  return sanitizeRadioContinuation(data?.continuation) || null;
+}
+
+function parsePanelVideoRenderers(
+  renderers: Array<Record<string, unknown>>,
+  excludeVideoId?: string
+): InnerTubeParsedTrack[] {
   const seenVideoIds = new Set<string>();
   if (excludeVideoId) {
     seenVideoIds.add(excludeVideoId);
@@ -252,6 +311,34 @@ export function parseInnerTubeWatchNextResponse(
   return results;
 }
 
+/**
+ * Pure parser for one YouTube Music `youtubei/v1/next` (`playlistId: "RDAMVM" + videoId`) radio
+ * page (`playlistPanelVideoRenderer` items). A continuation answer repeats the first page under
+ * `contents`, so when `continuationContents.playlistPanelContinuation` is present ONLY that part is
+ * read, for both the tracks and the next token.
+ */
+export function parseInnerTubeWatchNextPage(
+  rawJson: unknown,
+  excludeVideoId?: string
+): InnerTubeRadioPage {
+  const continuationPanel = asRecord(
+    asRecord(asRecord(rawJson)?.continuationContents)?.playlistPanelContinuation
+  );
+  if (continuationPanel) {
+    return {
+      tracks: parsePanelVideoRenderers(
+        collectPanelVideoRenderers(continuationPanel.contents),
+        excludeVideoId
+      ),
+      continuation: readNextRadioContinuation(continuationPanel),
+    };
+  }
+  return {
+    tracks: parsePanelVideoRenderers(collectPanelVideoRenderers(rawJson), excludeVideoId),
+    continuation: readNextRadioContinuation(findPlaylistPanelRenderer(rawJson)),
+  };
+}
+
 /* -------------------------------------------------------------------------------------------- *
  * Shared InnerTube request layer (used by the Express proxy AND by the native app shell, which
  * talks to YouTube Music directly because no Node backend runs inside an Android / iOS package).
@@ -288,14 +375,31 @@ export function buildInnerTubeSearchBody(query: string, params: string): Record<
   return { context: INNERTUBE_CLIENT_CONTEXT, query, params };
 }
 
-export function buildInnerTubeNextBody(seedVideoId: string): Record<string, unknown> {
-  return {
+function decodeContinuationToken(token: string): string {
+  try {
+    return decodeURIComponent(token);
+  } catch {
+    return token;
+  }
+}
+
+/**
+ * WatchNext body for the `RDAMVM` radio of `seedVideoId`. The next page is requested by re-sending
+ * the same body plus the URL-decoded `continuation` token of the previous page.
+ */
+export function buildInnerTubeNextBody(
+  seedVideoId: string,
+  continuation?: string
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
     context: INNERTUBE_CLIENT_CONTEXT,
     videoId: seedVideoId,
     playlistId: `RDAMVM${seedVideoId}`,
     isAudioOnly: true,
     enablePersistentPlaylistPanel: true,
   };
+  if (continuation) body.continuation = decodeContinuationToken(continuation);
+  return body;
 }
 
 /** Performs one InnerTube POST and resolves with the decoded JSON body (rejects on HTTP errors). */
@@ -330,13 +434,17 @@ export async function searchInnerTubeTracks(
   return [];
 }
 
-/** Fetches the `RDAMVM` radio (Up Next recommendations) for a seed video. */
-export async function fetchInnerTubeRadioTracks(
+/**
+ * Fetches one page of the `RDAMVM` radio (Up Next recommendations) for a seed video: the first page
+ * without `continuation`, the following ones with the token of the previous page.
+ */
+export async function fetchInnerTubeRadioPage(
   transport: InnerTubeTransport,
-  seedVideoId: string
-): Promise<InnerTubeParsedTrack[]> {
-  const raw = await transport('next', buildInnerTubeNextBody(seedVideoId));
-  return parseInnerTubeWatchNextResponse(raw, seedVideoId);
+  seedVideoId: string,
+  continuation?: string
+): Promise<InnerTubeRadioPage> {
+  const raw = await transport('next', buildInnerTubeNextBody(seedVideoId, continuation));
+  return parseInnerTubeWatchNextPage(raw, seedVideoId);
 }
 
 /* -------------------------------------------------------------------------------------------- *
@@ -406,143 +514,6 @@ export function deriveSongSearchTerms(
   }
 
   return { trackName, artistName };
-}
-
-/* -------------------------------------------------------------------------------------------- *
- * Playback queue rules (pure, unit-tested)
- * -------------------------------------------------------------------------------------------- */
-
-export type RepeatMode = 'OFF' | 'ALL' | 'ONE';
-
-/**
- * Decides which queue index plays next. Returns -1 when playback should stop
- * (natural end of the queue with repeat off).
- */
-export function pickNextQueueIndex(options: {
-  queueLength: number;
-  currentIndex: number;
-  direction: -1 | 1;
-  shuffle: boolean;
-  repeatMode: RepeatMode;
-  /** true for Next / Previous button presses, false when a track finished on its own */
-  userInitiated: boolean;
-  random?: () => number;
-}): number {
-  const { queueLength, currentIndex, direction, shuffle, repeatMode, userInitiated } = options;
-  if (queueLength <= 0) return -1;
-
-  // A finished track with "repeat one" replays itself; pressing Next still moves on
-  if (!userInitiated && repeatMode === 'ONE' && currentIndex >= 0) return currentIndex;
-
-  if (queueLength === 1) {
-    if (userInitiated || repeatMode !== 'OFF' || currentIndex < 0) return 0;
-    return -1;
-  }
-
-  // The playing track is no longer in the queue (it was removed): start from the top
-  if (currentIndex < 0 || currentIndex >= queueLength) return 0;
-
-  if (shuffle && direction === 1) {
-    const random = options.random || Math.random;
-    const offset = 1 + Math.min(queueLength - 2, Math.floor(random() * (queueLength - 1)));
-    return (currentIndex + offset) % queueLength;
-  }
-
-  const target = currentIndex + direction;
-  if (target >= queueLength) {
-    return repeatMode === 'OFF' && !userInitiated ? -1 : 0;
-  }
-  if (target < 0) {
-    return repeatMode === 'ALL' ? queueLength - 1 : 0;
-  }
-  return target;
-}
-
-/**
- * "Add to queue": places the track right after the current one and after any tracks the listener
- * already queued by hand, so manual picks play in the order they were added and before radio picks.
- */
-export function insertIntoQueueAfterCurrent<T extends { id: string }>(
-  queue: T[],
-  currentId: string,
-  track: T,
-  userQueuedIds: ReadonlySet<string>
-): T[] {
-  if (track.id === currentId) return queue;
-  const without = queue.filter((t) => t.id !== track.id);
-  const currentIdx = without.findIndex((t) => t.id === currentId);
-  let insertAt = currentIdx + 1;
-  while (insertAt < without.length && userQueuedIds.has(without[insertAt].id)) {
-    insertAt++;
-  }
-  return [...without.slice(0, insertAt), track, ...without.slice(insertAt)];
-}
-
-/**
- * "Play this now": keeps what was already played (so Previous still works), plays `track` next,
- * keeps hand-queued tracks after it, then `followUps` (the rest of the list the track was picked
- * from). Stale automatic picks from the previous listening context are dropped.
- */
-export function buildPlayNowQueue<T extends { id: string }>(
-  queue: T[],
-  currentId: string | null,
-  track: T,
-  userQueuedIds: ReadonlySet<string>,
-  followUps: T[] = []
-): T[] {
-  const currentIdx = currentId === null ? -1 : queue.findIndex((t) => t.id === currentId);
-  const played = currentIdx === -1 ? [] : queue.slice(0, currentIdx + 1);
-  const upcoming = currentIdx === -1 ? queue : queue.slice(currentIdx + 1);
-
-  const result: T[] = [];
-  const seen = new Set<string>([track.id]);
-  for (const item of played) {
-    if (!seen.has(item.id)) {
-      seen.add(item.id);
-      result.push(item);
-    }
-  }
-  result.push(track);
-  for (const item of [...upcoming.filter((t) => userQueuedIds.has(t.id)), ...followUps]) {
-    if (!seen.has(item.id)) {
-      seen.add(item.id);
-      result.push(item);
-    }
-  }
-  return result;
-}
-
-/**
- * Autoplay radio: tops the queue up with recommendations only when it is about to run dry,
- * so hand-queued tracks and the visible "Up Next" order are never thrown away.
- */
-export function mergeRadioIntoQueue<T extends { id: string }>(
-  queue: T[],
-  currentId: string,
-  radioTracks: T[],
-  options: { minUpcoming?: number; maxAppend?: number; maxHistory?: number } = {}
-): T[] {
-  const minUpcoming = options.minUpcoming ?? 3;
-  const maxAppend = options.maxAppend ?? 10;
-  const maxHistory = options.maxHistory ?? 30;
-
-  const currentIdx = queue.findIndex((t) => t.id === currentId);
-  if (currentIdx === -1) return queue;
-  const upcoming = queue.length - currentIdx - 1;
-  if (upcoming >= minUpcoming) return queue;
-
-  const seen = new Set(queue.map((t) => t.id));
-  const additions: T[] = [];
-  for (const candidate of radioTracks) {
-    if (additions.length >= maxAppend) break;
-    if (seen.has(candidate.id)) continue;
-    seen.add(candidate.id);
-    additions.push(candidate);
-  }
-  if (additions.length === 0) return queue;
-
-  const historyStart = Math.max(0, currentIdx - maxHistory);
-  return [...queue.slice(historyStart), ...additions];
 }
 
 /**

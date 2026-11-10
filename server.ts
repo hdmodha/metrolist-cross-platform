@@ -6,9 +6,10 @@ import { createServer as createViteServer } from 'vite';
 import {
   INNERTUBE_API_ORIGIN,
   INNERTUBE_ENDPOINT_URLS,
-  fetchInnerTubeRadioTracks,
+  fetchInnerTubeRadioPage,
   isValidYouTubeVideoId,
   sanitizeApiQueryText,
+  sanitizeRadioContinuation,
   searchInnerTubeTracks,
   type InnerTubeTransport,
 } from './src/utils/metrolistCore.ts';
@@ -151,7 +152,15 @@ async function startServer() {
     const title = sanitizeApiQueryText(req.query.title, 120);
     const artist = sanitizeApiQueryText(req.query.artist, 120);
 
-    const cacheKey = `${rawVideoId}:${title.toLowerCase()}:${artist.toLowerCase()}`;
+    // Optional radio continuation token (next page of the same `RDAMVM` radio)
+    const hasContinuation = req.query.continuation !== undefined;
+    const continuation = sanitizeRadioContinuation(req.query.continuation);
+    if (hasContinuation && (!continuation || !isValidYouTubeVideoId(rawVideoId))) {
+      res.status(400).json({ error: 'Invalid radio continuation request.' });
+      return;
+    }
+
+    const cacheKey = `${rawVideoId}:${title.toLowerCase()}:${artist.toLowerCase()}:${continuation}`;
     const cached = recommendationsCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       res.json(cached.payload);
@@ -177,13 +186,19 @@ async function startServer() {
       }
 
       // Query YouTube Music's official RDAMVM Radio / WatchNext recommendation engine
-      const tracks = (await fetchInnerTubeRadioTracks(innerTubeTransport, seedVideoId)).slice(0, 20);
+      const page = await fetchInnerTubeRadioPage(
+        innerTubeTransport,
+        seedVideoId,
+        continuation || undefined
+      );
+      const tracks = page.tracks.slice(0, 20);
 
       const payload = {
         source: `YouTube Music Radio (RDAMVM${seedVideoId})`,
         seedVideoId,
         count: tracks.length,
         tracks,
+        continuation: page.continuation,
       };
       if (tracks.length > 0) {
         setBoundedCache(recommendationsCache, cacheKey, payload);
