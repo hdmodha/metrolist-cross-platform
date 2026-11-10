@@ -24,34 +24,29 @@ npm run test:e2e
 
 ---
 
-## 2. Prioritized Bug & Improvement Backlog for Collaborating LLMs
+## 2. Architecture in One Minute
 
-When asked to fix bugs or improve playback reliability across platforms, address these items in order:
+- Pure logic is test-first: `src/player/playerCore.ts` (reducer + selectors), `queueRules.ts`, `effectPolicies.ts`, `src/app/router.ts`, `src/app/nowPlayingHistory.ts`, `src/utils/persistence.ts`, `src/utils/recentSearches.ts`. Write the failing `node:test` test first; keep the reducer free of time and randomness (inject them through action payloads).
+- `src/player/usePlayer.ts` is the only hook with side effects. Components and pages are presentational (`React.memo`) and call the stable `usePlayer().actions` (shared through `AppActionsContext`).
+- The playback position never goes into React state: only `SeekBar` and `ProgressLine` subscribe to the playback clock. The e2e render proof fails if anything else re-renders on ticks.
+- Routing is a dependency-free hash router; Now Playing's open state is backed by one history entry so Back closes it.
+- Every song is a YouTube Music song. "Download" only adds a song to the Downloads list (no audio is stored) — do not imply offline playback.
+- See `./CLAUDE.md` for the file map, data flows and caveats.
 
-### Priority 1: Standalone Mobile APK / Static Client API Fallback — IMPLEMENTED (`src/utils/apiClient.ts`)
-- **Status**: `VITE_API_BASE_URL` support plus a direct InnerTube path through Capacitor's native HTTP bridge are in place. Still to do: verify on a real device build.
-- **Original symptom**: In the Capacitor Android `.apk` (`com.metrolist.music`), the app runs inside an Android WebView at `https://localhost` without the Node.js `server.ts` backend running on the device. Relative calls to `/api/innertube/search` and `/api/innertube/recommendations` fail unless a remote backend URL or client-side fallback is configured.
-- **Target Files**: `src/App.tsx`, `src/components/PlayerLibraryView.tsx`, `capacitor.config.json`.
-- **Recommended Solution**:
-  - Introduce an `API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''` helper.
-  - Add a resilient client-side fallback when `/api/innertube/*` is unreachable in standalone mobile builds (e.g., using CORS-enabled music search/stream endpoints).
+## 3. Prioritized Backlog for Collaborating LLMs
 
-### Priority 2: Unified Audio Element & Web Audio EQ for Live Streams
-- **Symptom**: `src/components/YouTubeStreamBridge.tsx` plays live YouTube Music tracks via a hidden `1x1` YouTube IFrame (`www.youtube.com`). Because cross-origin `<iframe>` audio cannot be routed into a Web Audio `MediaElementAudioSourceNode`, the 5-band parametric EQ and real-time FFT visualizer in `src/utils/webAudioSynth.ts` only affect synthesized audio rather than the YouTube IFrame output, and mobile WebViews may block unmuted background iframe playback.
-- **Target Files**: `src/components/YouTubeStreamBridge.tsx`, `src/utils/webAudioSynth.ts`, `src/App.tsx`.
-- **Recommended Solution**:
-  - Add direct audio stream extraction or `<audio crossOrigin="anonymous">` playback fallback connected to `sharedAudioEngine`, while keeping `YouTubeStreamBridge` as a fallback when direct stream URLs are unavailable.
+### Priority 1: Verify the Standalone Mobile App on Real Devices
+- The packaged Android / iOS app calls YouTube Music directly through Capacitor's native HTTP bridge (`src/utils/apiClient.ts`) and relies on the hash router for the hardware Back button. Both were verified against simulated environments only: test a real APK / iOS build.
 
-### Priority 3: Persistent User Library (Liked Songs, Playlists & Queue) — PARTLY IMPLEMENTED (`src/utils/persistence.ts`)
-- **Status**: library, likes, download flags, volume, shuffle / repeat, autoplay and EQ gains persist in `localStorage`. The queue, current song, position and radio session persist too and are restored (paused) on launch (`usePlayer.ts` → `persistence.ts`). Playlists are not persisted yet.
-- **Original symptom**: Liked songs (`liked`), offline cache toggles (`cachedOffline`), EQ gains (`eqGains`), and custom queue order reset on page reload because state in `src/App.tsx` is currently held in React memory (`useState`).
-- **Target Files**: `src/App.tsx`.
-- **Recommended Solution**:
-  - Persist `liked` track IDs, `queue`, `eqGains`, `volume`, and `autoplayRadio` in `localStorage` (or `IndexedDB`) with safe JSON schema validation.
+### Priority 2: Direct Audio Streams (Background Play, Real Downloads)
+- `src/components/YouTubeStreamBridge.tsx` plays through a hidden YouTube IFrame. Mobile WebViews may throttle it in the background, and the audio cannot be stored. A direct `<audio>` stream path (keeping the bridge as a fallback) would allow background playback and real offline Downloads.
+
+### Priority 3: Playlists
+- The library has Liked Songs, Downloads and Recently played (`likedIds`, `downloadedIds`, `recentlyPlayedIds` in the player core, persisted in `metrolist.player.v2`). User playlists would follow the same pattern: an ordered id list in the reducer, a v3 persistence shape with a migration test, and a page under `#/library/…`.
 
 ---
 
-## 3. Security & CI Rules (CodeQL + Dependabot)
+## 4. Security & CI Rules (CodeQL + Dependabot)
 
 - **Never remove `express-rate-limit` from `server.ts`**: CodeQL rule `js/missing-rate-limiting` requires `rateLimit(...)` from `express-rate-limit` on routes serving files.
 - **Never pass raw string URLs with user query params to `fetch()` in `server.ts`**: Always use `new URL(...)` + `.searchParams.set(...)` + explicit `url.origin` verification to satisfy CodeQL rule `js/request-forgery`.
