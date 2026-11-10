@@ -1,5 +1,17 @@
 import React from 'react';
 
+/**
+ * - `loading`:   the player (or a new video) is still being set up
+ * - `buffering`: the stream is stalled waiting for data
+ * - `playing` / `paused`: self-explanatory
+ * - `blocked`:   the browser refused to start audio without a tap on the player itself
+ *                (iOS Safari, strict autoplay policies) — the player is revealed so it can be tapped
+ */
+export type StreamStatus = 'loading' | 'buffering' | 'playing' | 'paused' | 'blocked';
+
+/** Error code reported when the YouTube IFrame API script itself cannot be loaded (offline, blocked). */
+export const STREAM_ERROR_API_UNAVAILABLE = -1;
+
 interface YouTubeStreamBridgeProps {
   videoId: string;
   isPlaying: boolean;
@@ -7,10 +19,13 @@ interface YouTubeStreamBridgeProps {
   isMuted: boolean;
   seekRequestMs: number | null;
   onSeekHandled?: () => void;
-  onPlayingStateChange?: (activelyPlaying: boolean) => void;
+  onStatusChange: (status: StreamStatus) => void;
   onTimeUpdateMs: (currentMs: number, durationMs?: number) => void;
   onEnded: () => void;
-  onFallbackNeeded: () => void;
+  /** YouTube player error code (2, 5, 100, 101, 150) or `STREAM_ERROR_API_UNAVAILABLE`. */
+  onError: (code: number) => void;
+  /** The stream was paused / resumed outside the app UI (OS media keys, headset button, tap on player). */
+  onExternalPlayPause?: (playing: boolean) => void;
 }
 
 declare global {
@@ -30,13 +45,6 @@ declare global {
           };
         }
       ) => YTPlayerInstance;
-      PlayerState?: {
-        ENDED: number;
-        PLAYING: number;
-        PAUSED: number;
-        BUFFERING: number;
-        CUED: number;
-      };
     };
     onYouTubeIframeAPIReady?: () => void;
   }
@@ -44,6 +52,7 @@ declare global {
 
 interface YTPlayerInstance {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
+  cueVideoById: (videoId: string, startSeconds?: number) => void;
   playVideo: () => void;
   pauseVideo: () => void;
   seekTo: (seconds: number, allowSeekAhead: boolean) => void;
@@ -56,109 +65,260 @@ interface YTPlayerInstance {
   destroy: () => void;
 }
 
-let ytScriptLoading = false;
-const readyCallbacks: Array<() => void> = [];
+const YT_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 } as const;
 
-function loadYouTubeIframeApi(cb: () => void) {
+const API_LOAD_TIMEOUT_MS = 15000;
+/** How long a requested start may sit in "unstarted" before we assume autoplay was refused. */
+const START_WATCHDOG_MS = 6000;
+const START_WATCHDOG_AFTER_BLOCK_MS = 1800;
+/** Grace period before a pause / play that the app did not ask for is treated as external. */
+const EXTERNAL_STATE_SETTLE_MS = 700;
+
+interface ApiListener {
+  ready: () => void;
+  fail: () => void;
+}
+
+let ytApiLoading = false;
+const apiListeners: ApiListener[] = [];
+
+function flushApiListeners(outcome: keyof ApiListener) {
+  const pending = apiListeners.splice(0, apiListeners.length);
+  for (const listener of pending) {
+    listener[outcome]();
+  }
+}
+
+function loadYouTubeIframeApi(listener: ApiListener) {
   if (typeof window === 'undefined') return;
   if (window.YT && window.YT.Player) {
-    cb();
+    listener.ready();
     return;
   }
-  readyCallbacks.push(cb);
-  if (ytScriptLoading) return;
-  ytScriptLoading = true;
+  apiListeners.push(listener);
+  if (ytApiLoading) return;
+  ytApiLoading = true;
+
+  let settled = false;
+  const settle = (outcome: keyof ApiListener) => {
+    if (settled) return;
+    settled = true;
+    ytApiLoading = false;
+    window.clearTimeout(timeoutId);
+    flushApiListeners(outcome);
+  };
 
   const prev = window.onYouTubeIframeAPIReady;
   window.onYouTubeIframeAPIReady = () => {
     if (prev) prev();
-    while (readyCallbacks.length > 0) {
-      const fn = readyCallbacks.shift();
-      if (fn) fn();
-    }
+    settle('ready');
   };
 
   const script = document.createElement('script');
   script.src = 'https://www.youtube.com/iframe_api';
   script.async = true;
   script.onerror = () => {
-    ytScriptLoading = false;
+    script.remove();
+    settle('fail');
   };
+  const timeoutId = window.setTimeout(() => {
+    if (!(window.YT && window.YT.Player)) {
+      script.remove();
+      settle('fail');
+    }
+  }, API_LOAD_TIMEOUT_MS);
   document.head.appendChild(script);
 }
 
-export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = ({
-  videoId,
-  isPlaying,
-  volume,
-  isMuted,
-  seekRequestMs,
-  onSeekHandled,
-  onPlayingStateChange,
-  onTimeUpdateMs,
-  onEnded,
-  onFallbackNeeded,
-}) => {
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
+export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) => {
+  const { videoId, isPlaying, volume, isMuted, seekRequestMs } = props;
+
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
   const playerRef = React.useRef<YTPlayerInstance | null>(null);
-  const isReadyRef = React.useRef<boolean>(false);
-  const currentVideoIdRef = React.useRef<string>(videoId);
-  const isPlayingRef = React.useRef<boolean>(isPlaying);
+  const isReadyRef = React.useRef(false);
+  const apiFailedRef = React.useRef(false);
+  const loadedVideoIdRef = React.useRef(videoId);
+  const everBlockedRef = React.useRef(false);
+  const watchdogRef = React.useRef<number | null>(null);
+  const settleTimerRef = React.useRef<number | null>(null);
+  const initPlayerRef = React.useRef<() => void>(() => {});
+  const [isBlocked, setIsBlocked] = React.useState(false);
 
-  isPlayingRef.current = isPlaying;
+  // Always call the latest callbacks / read the latest props from long-lived player event handlers.
+  // (Capturing them once at mount made "track ended" act on a stale queue.)
+  const latest = React.useRef(props);
+  latest.current = props;
 
-  // Mount YouTube IFrame Player once
+  const clearWatchdog = React.useCallback(() => {
+    if (watchdogRef.current !== null) {
+      window.clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
+
+  /** After asking the player to start, verify that it really left the "unstarted" state. */
+  const armStartWatchdog = React.useCallback(() => {
+    clearWatchdog();
+    watchdogRef.current = window.setTimeout(
+      () => {
+        watchdogRef.current = null;
+        const player = playerRef.current;
+        if (!player || !isReadyRef.current || !latest.current.isPlaying) return;
+        let state: number = YT_STATE.UNSTARTED;
+        try {
+          state = player.getPlayerState();
+        } catch {
+          // keep UNSTARTED
+        }
+        if (state === YT_STATE.UNSTARTED || state === YT_STATE.CUED) {
+          everBlockedRef.current = true;
+          setIsBlocked(true);
+          latest.current.onStatusChange('blocked');
+        }
+      },
+      everBlockedRef.current ? START_WATCHDOG_AFTER_BLOCK_MS : START_WATCHDOG_MS
+    );
+  }, [clearWatchdog]);
+
+  const applyVolume = React.useCallback((player: YTPlayerInstance) => {
+    const { volume: vol, isMuted: muted } = latest.current;
+    try {
+      player.setVolume(Math.round(vol * 100));
+      if (muted || vol === 0) player.mute();
+      else player.unMute();
+    } catch {
+      // ignore transient player state
+    }
+  }, []);
+
+  // Mount the YouTube IFrame player once
   React.useEffect(() => {
-    let mounted = true;
+    let disposed = false;
+    const host = hostRef.current;
 
-    loadYouTubeIframeApi(() => {
-      if (!mounted || !containerRef.current || !window.YT?.Player) return;
+    const initPlayer = () => {
+      if (disposed || !host || playerRef.current) return;
+      apiFailedRef.current = false;
+      latest.current.onStatusChange('loading');
 
-      playerRef.current = new window.YT.Player(containerRef.current, {
-        videoId: currentVideoIdRef.current,
-        width: '100%',
-        height: '100%',
-        playerVars: {
-          autoplay: isPlayingRef.current ? 1 : 0,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          modestbranding: 1,
-          rel: 0,
-          playsinline: 1,
-          origin: window.location.origin,
+      loadYouTubeIframeApi({
+        fail: () => {
+          if (disposed) return;
+          apiFailedRef.current = true;
+          latest.current.onError(STREAM_ERROR_API_UNAVAILABLE);
         },
-        events: {
-          onReady: (ev) => {
-            if (!mounted) return;
-            isReadyRef.current = true;
-            ev.target.setVolume(Math.round(volume * 100));
-            if (isMuted) ev.target.mute();
-            if (isPlayingRef.current) {
-              ev.target.playVideo();
-            }
-          },
-          onStateChange: (ev) => {
-            if (!mounted) return;
-            onPlayingStateChange?.(ev.data === 1);
-            // YT.PlayerState.ENDED === 0
-            if (ev.data === 0) {
-              onEnded();
-            }
-          },
-          onError: () => {
-            if (!mounted) return;
-            onPlayingStateChange?.(false);
-            onFallbackNeeded();
-          },
+        ready: () => {
+          if (disposed || !window.YT?.Player || playerRef.current) return;
+
+          // The API replaces this node with its <iframe>; keep it outside React's control
+          const mountNode = document.createElement('div');
+          host.replaceChildren(mountNode);
+
+          const playerVars: Record<string, string | number> = {
+            autoplay: latest.current.isPlaying ? 1 : 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            rel: 0,
+            playsinline: 1,
+          };
+          if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+            playerVars.origin = window.location.origin;
+          }
+
+          loadedVideoIdRef.current = latest.current.videoId;
+          try {
+            playerRef.current = new window.YT.Player(mountNode, {
+              videoId: latest.current.videoId,
+              width: '100%',
+              height: '100%',
+              playerVars,
+              events: {
+                onReady: (ev) => {
+                  if (disposed) return;
+                  isReadyRef.current = true;
+                  applyVolume(ev.target);
+                  // The track may have changed while the player was still loading
+                  const wanted = latest.current.videoId;
+                  if (wanted !== loadedVideoIdRef.current) {
+                    loadedVideoIdRef.current = wanted;
+                    if (latest.current.isPlaying) ev.target.loadVideoById(wanted, 0);
+                    else ev.target.cueVideoById(wanted, 0);
+                  } else if (latest.current.isPlaying) {
+                    ev.target.playVideo();
+                  }
+                  if (latest.current.isPlaying) armStartWatchdog();
+                  else latest.current.onStatusChange('paused');
+                },
+                onStateChange: (ev) => {
+                  if (disposed) return;
+                  const state = ev.data;
+                  if (settleTimerRef.current !== null) {
+                    window.clearTimeout(settleTimerRef.current);
+                    settleTimerRef.current = null;
+                  }
+
+                  if (state === YT_STATE.PLAYING) {
+                    clearWatchdog();
+                    setIsBlocked(false);
+                    latest.current.onStatusChange('playing');
+                    if (!latest.current.isPlaying) {
+                      settleTimerRef.current = window.setTimeout(() => {
+                        settleTimerRef.current = null;
+                        const player = playerRef.current;
+                        if (disposed || !player || latest.current.isPlaying) return;
+                        if (player.getPlayerState() === YT_STATE.PLAYING) {
+                          latest.current.onExternalPlayPause?.(true);
+                        }
+                      }, EXTERNAL_STATE_SETTLE_MS);
+                    }
+                  } else if (state === YT_STATE.BUFFERING) {
+                    clearWatchdog();
+                    if (latest.current.isPlaying) latest.current.onStatusChange('buffering');
+                  } else if (state === YT_STATE.PAUSED) {
+                    latest.current.onStatusChange('paused');
+                    if (latest.current.isPlaying) {
+                      settleTimerRef.current = window.setTimeout(() => {
+                        settleTimerRef.current = null;
+                        const player = playerRef.current;
+                        if (disposed || !player || !latest.current.isPlaying) return;
+                        if (player.getPlayerState() === YT_STATE.PAUSED) {
+                          latest.current.onExternalPlayPause?.(false);
+                        }
+                      }, EXTERNAL_STATE_SETTLE_MS);
+                    }
+                  } else if (state === YT_STATE.ENDED) {
+                    clearWatchdog();
+                    latest.current.onEnded();
+                  }
+                },
+                onError: (ev) => {
+                  if (disposed) return;
+                  clearWatchdog();
+                  latest.current.onError(typeof ev.data === 'number' ? ev.data : 5);
+                },
+              },
+            });
+          } catch {
+            apiFailedRef.current = true;
+            latest.current.onError(STREAM_ERROR_API_UNAVAILABLE);
+          }
         },
       });
-    });
+    };
+
+    initPlayerRef.current = initPlayer;
+    initPlayer();
 
     return () => {
-      mounted = false;
+      disposed = true;
       isReadyRef.current = false;
-      onPlayingStateChange?.(false);
+      clearWatchdog();
+      if (settleTimerRef.current !== null) {
+        window.clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
       if (playerRef.current) {
         try {
           playerRef.current.destroy();
@@ -167,84 +327,87 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = ({
         }
         playerRef.current = null;
       }
+      host?.replaceChildren();
     };
-  }, []);
+  }, [applyVolume, armStartWatchdog, clearWatchdog]);
 
-  // Switch videoId when user selects a different YouTube Music track
+  // Switch video when a different track (or an alternate upload of the same track) is selected
   React.useEffect(() => {
-    if (currentVideoIdRef.current === videoId) return;
-    currentVideoIdRef.current = videoId;
-    if (playerRef.current && isReadyRef.current) {
-      try {
-        playerRef.current.loadVideoById(videoId, 0);
-        if (!isPlayingRef.current) {
-          playerRef.current.pauseVideo();
-        }
-      } catch {
-        onFallbackNeeded();
+    if (loadedVideoIdRef.current === videoId) return;
+    const player = playerRef.current;
+    if (!player || !isReadyRef.current) return; // onReady picks up the latest videoId
+    loadedVideoIdRef.current = videoId;
+    setIsBlocked(false);
+    try {
+      if (latest.current.isPlaying) {
+        latest.current.onStatusChange('loading');
+        player.loadVideoById(videoId, 0);
+        armStartWatchdog();
+      } else {
+        player.cueVideoById(videoId, 0);
       }
+    } catch {
+      latest.current.onError(5);
     }
-  }, [videoId, onFallbackNeeded]);
+  }, [videoId, armStartWatchdog]);
 
   // Sync Play / Pause
   React.useEffect(() => {
-    if (!playerRef.current || !isReadyRef.current) return;
+    const player = playerRef.current;
+    if (!player || !isReadyRef.current) {
+      // The API script failed earlier (e.g. offline): pressing play retries the whole setup
+      if (isPlaying && apiFailedRef.current) initPlayerRef.current();
+      return;
+    }
     try {
       if (isPlaying) {
-        playerRef.current.playVideo();
+        player.playVideo();
+        armStartWatchdog();
       } else {
-        playerRef.current.pauseVideo();
-        onPlayingStateChange?.(false);
+        clearWatchdog();
+        setIsBlocked(false);
+        player.pauseVideo();
       }
     } catch {
       // ignore transient state
     }
-  }, [isPlaying, onPlayingStateChange]);
+  }, [isPlaying, armStartWatchdog, clearWatchdog]);
 
   // Sync Volume & Mute
   React.useEffect(() => {
     if (!playerRef.current || !isReadyRef.current) return;
-    try {
-      playerRef.current.setVolume(Math.round(volume * 100));
-      if (isMuted || volume === 0) {
-        playerRef.current.mute();
-      } else {
-        playerRef.current.unMute();
-      }
-    } catch {
-      // ignore
-    }
-  }, [volume, isMuted]);
+    applyVolume(playerRef.current);
+  }, [volume, isMuted, applyVolume]);
 
-  // Sync explicit user seek requests (scrubbing or clicking synced lyrics)
+  // Sync explicit user seek requests (scrubbing, clicking synced lyrics, restart)
   React.useEffect(() => {
     if (seekRequestMs === null) return;
-    if (playerRef.current && isReadyRef.current) {
+    const player = playerRef.current;
+    if (player && isReadyRef.current) {
       try {
-        playerRef.current.seekTo(seekRequestMs / 1000, true);
+        player.seekTo(seekRequestMs / 1000, true);
+        if (latest.current.isPlaying) player.playVideo();
       } catch {
         // ignore
       }
     }
-    onSeekHandled?.();
-  }, [seekRequestMs, onSeekHandled]);
+    latest.current.onSeekHandled?.();
+  }, [seekRequestMs]);
 
   // Poll current playback time & full song duration every 250ms while playing
   React.useEffect(() => {
     if (!isPlaying) return;
     const timer = window.setInterval(() => {
-      if (!playerRef.current || !isReadyRef.current) return;
+      const player = playerRef.current;
+      if (!player || !isReadyRef.current) return;
       try {
-        const state = playerRef.current.getPlayerState();
-        // 1 === PLAYING
-        if (state === 1) {
-          const curSec = playerRef.current.getCurrentTime();
-          const durSec = playerRef.current.getDuration();
-          if (Number.isFinite(curSec) && curSec >= 0) {
-            const durMs =
-              Number.isFinite(durSec) && durSec > 35 ? Math.round(durSec * 1000) : undefined;
-            onTimeUpdateMs(Math.round(curSec * 1000), durMs);
-          }
+        if (player.getPlayerState() !== YT_STATE.PLAYING) return;
+        const curSec = player.getCurrentTime();
+        const durSec = player.getDuration();
+        if (Number.isFinite(curSec) && curSec >= 0) {
+          const durMs =
+            Number.isFinite(durSec) && durSec > 35 ? Math.round(durSec * 1000) : undefined;
+          latest.current.onTimeUpdateMs(Math.round(curSec * 1000), durMs);
         }
       } catch {
         // ignore
@@ -252,14 +415,23 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = ({
     }, 250);
 
     return () => window.clearInterval(timer);
-  }, [isPlaying, onTimeUpdateMs]);
+  }, [isPlaying]);
 
   return (
     <div
-      aria-hidden="true"
-      className="fixed bottom-0 right-0 w-px h-px opacity-0 pointer-events-none overflow-hidden"
+      aria-hidden={!isBlocked}
+      className={
+        isBlocked
+          ? 'fixed right-3 z-50 w-64 max-w-[calc(100vw-1.5rem)] rounded-xl overflow-hidden border border-emerald-500/50 bg-zinc-950 shadow-2xl bottom-[calc(5.75rem+env(safe-area-inset-bottom))]'
+          : 'fixed bottom-0 right-0 w-px h-px opacity-0 pointer-events-none overflow-hidden'
+      }
     >
-      <div ref={containerRef} />
+      {isBlocked && (
+        <p className="px-3 py-2 text-xs font-semibold text-emerald-300">
+          Tap the player below to start playback
+        </p>
+      )}
+      <div ref={hostRef} className={isBlocked ? 'w-full aspect-video' : 'w-px h-px'} />
     </div>
   );
 };

@@ -63,6 +63,12 @@ export interface SecurityVulnerabilityItem {
   hardenedKmpSnippet: string;
 }
 
+// Resolved through the bundler so the artwork ships in production builds (web `dist/`, APK, desktop)
+const COVER_ANALOG_HORIZON = new URL('../assets/images/album_analog_horizon_1794313623251.jpg', import.meta.url).href;
+const COVER_MIDNIGHT_SYNTH = new URL('../assets/images/album_midnight_synth_1794313619830.jpg', import.meta.url).href;
+const COVER_NORDIC_ECHOES = new URL('../assets/images/album_nordic_echoes_1794313623118.jpg', import.meta.url).href;
+const COVER_TOKYO_RAIN = new URL('../assets/images/album_tokyo_rain_1794313623366.jpg', import.meta.url).href;
+
 const DEFAULT_CANDIDATES: StreamFormatCandidate[] = [
   {
     itag: 251,
@@ -107,7 +113,7 @@ export const INITIAL_TRACKS: MetrolistTrack[] = [
     bpm: 112,
     rootFreqHz: 220.0, // A3 minor
     chordIntervals: [0, 3, 7, 10],
-    coverUrl: '/src/assets/images/album_midnight_synth_1794313619830.jpg',
+    coverUrl: COVER_MIDNIGHT_SYNTH,
     accentColor: '#6366F1',
     genre: 'Synthwave',
     liked: true,
@@ -139,7 +145,7 @@ export const INITIAL_TRACKS: MetrolistTrack[] = [
     bpm: 94,
     rootFreqHz: 196.0, // G3
     chordIntervals: [0, 4, 7, 11],
-    coverUrl: '/src/assets/images/album_tokyo_rain_1794313623366.jpg',
+    coverUrl: COVER_TOKYO_RAIN,
     accentColor: '#F59E0B',
     genre: 'Ambient',
     liked: true,
@@ -169,7 +175,7 @@ export const INITIAL_TRACKS: MetrolistTrack[] = [
     bpm: 78,
     rootFreqHz: 164.81, // E3
     chordIntervals: [0, 3, 7, 14],
-    coverUrl: '/src/assets/images/album_nordic_echoes_1794313623118.jpg',
+    coverUrl: COVER_NORDIC_ECHOES,
     accentColor: '#38BDF8',
     genre: 'Post-Rock',
     liked: false,
@@ -198,7 +204,7 @@ export const INITIAL_TRACKS: MetrolistTrack[] = [
     bpm: 124,
     rootFreqHz: 246.94, // B3
     chordIntervals: [0, 5, 7, 10],
-    coverUrl: '/src/assets/images/album_analog_horizon_1794313623251.jpg',
+    coverUrl: COVER_ANALOG_HORIZON,
     accentColor: '#10B981',
     genre: 'Electronic',
     liked: true,
@@ -227,7 +233,7 @@ export const INITIAL_TRACKS: MetrolistTrack[] = [
     bpm: 105,
     rootFreqHz: 174.61, // F3
     chordIntervals: [0, 4, 7, 9],
-    coverUrl: '/src/assets/images/album_midnight_synth_1794313619830.jpg',
+    coverUrl: COVER_MIDNIGHT_SYNTH,
     accentColor: '#8B5CF6',
     genre: 'Indie',
     liked: false,
