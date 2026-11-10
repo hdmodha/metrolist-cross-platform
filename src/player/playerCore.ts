@@ -122,8 +122,9 @@ export type PlayerAction =
   | { type: 'removeFromQueue'; trackId: string }
   | { type: 'moveQueueItem'; trackId: string; direction: -1 | 1 }
   | { type: 'clearUpcoming' }
-  | { type: 'toggleLike'; trackId: string }
-  | { type: 'toggleDownloaded'; trackId: string }
+  /** `track` lets a search card the player has not seen yet be liked / downloaded. */
+  | { type: 'toggleLike'; trackId: string; track?: TrackInput }
+  | { type: 'toggleDownloaded'; trackId: string; track?: TrackInput }
   | { type: 'toggleShuffle' }
   | { type: 'cycleRepeat' }
   | { type: 'toggleAutoplayRadio' }
@@ -159,7 +160,7 @@ export type PlayerAction =
 
 const hasOwn = (record: object, key: string) => Object.prototype.hasOwnProperty.call(record, key);
 
-function getTrack(state: PlayerState, id: string): MetrolistTrack | undefined {
+function getTrack(state: Pick<PlayerState, 'tracksById'>, id: string): MetrolistTrack | undefined {
   return id && hasOwn(state.tracksById, id) ? state.tracksById[id] : undefined;
 }
 
@@ -383,7 +384,8 @@ function playNow(state: PlayerState, track: MetrolistTrack, followUps: Metrolist
       toRefs(followUps.map((t) => t.id))
     )
   );
-  return startTrack({ ...withAll, queueIds }, track.id, { recordHistory: true, userInitiated: true });
+  // A new listening context: the previous radio session must not keep appending its pages
+  return startTrack({ ...withAll, queueIds, radio: null }, track.id, { recordHistory: true, userInitiated: true });
 }
 
 function trackUnplayable(state: PlayerState, trackId: string, random: number): PlayerState {
@@ -476,11 +478,20 @@ function clearUpcoming(state: PlayerState): PlayerState {
   return { ...state, queueIds: state.queueIds.slice(0, idx + 1), userQueuedIds: [], radio: null };
 }
 
-function toggleFlag(state: PlayerState, trackId: string, flag: 'liked' | 'cachedOffline'): PlayerState {
-  const track = getTrack(state, trackId);
+function toggleFlag(
+  state: PlayerState,
+  trackId: string,
+  flag: 'liked' | 'cachedOffline',
+  input: TrackInput | undefined
+): PlayerState {
+  // A card the player has not seen yet is added first (its id must match the request)
+  const candidate = !getTrack(state, trackId) && input ? resolveTrack(state, input) : undefined;
+  if (candidate && candidate.id !== trackId) return state;
+  const withTrack = candidate ? withTracks(state, [candidate]) : state;
+  const track = getTrack(withTrack, trackId);
   if (!track) return state;
   // A liked / downloaded song must live in the library even if it was only ever in the queue
-  const patched = patchTrack(state, trackId, { [flag]: !track[flag] });
+  const patched = patchTrack(withTrack, trackId, { [flag]: !track[flag] });
   return { ...patched, libraryIds: addToLibraryFront(patched.libraryIds, trackId) };
 }
 
@@ -667,9 +678,9 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
     case 'clearUpcoming':
       return clearUpcoming(state);
     case 'toggleLike':
-      return toggleFlag(state, action.trackId, 'liked');
+      return toggleFlag(state, action.trackId, 'liked', action.track);
     case 'toggleDownloaded':
-      return toggleFlag(state, action.trackId, 'cachedOffline');
+      return toggleFlag(state, action.trackId, 'cachedOffline', action.track);
     case 'toggleShuffle':
       return { ...state, shuffleEnabled: !state.shuffleEnabled };
     case 'cycleRepeat':
@@ -844,12 +855,19 @@ export function selectActiveTrack(state: PlayerState): MetrolistTrack | null {
   return getTrack(state, state.activeTrackId) ?? null;
 }
 
-export function selectQueueTracks(state: PlayerState): MetrolistTrack[] {
+export function selectQueueTracks(state: Pick<PlayerState, 'tracksById' | 'queueIds'>): MetrolistTrack[] {
   return state.queueIds.map((id) => getTrack(state, id)).filter((t): t is MetrolistTrack => !!t);
 }
 
-export function selectLibraryTracks(state: PlayerState): MetrolistTrack[] {
+export function selectLibraryTracks(state: Pick<PlayerState, 'tracksById' | 'libraryIds'>): MetrolistTrack[] {
   return state.libraryIds.map((id) => getTrack(state, id)).filter((t): t is MetrolistTrack => !!t);
+}
+
+/** A live song the listener wants to hear is still loading, buffering or waiting for the network. */
+export function selectIsStreamLoading(state: PlayerState): boolean {
+  const active = getTrack(state, state.activeTrackId);
+  if (!active?.isLiveInnerTube || !state.isPlaying) return false;
+  return state.network.waiting || state.streamStatus === 'loading' || state.streamStatus === 'buffering';
 }
 
 /** Ids queued after the active song (the whole queue while the active song is not in it). */

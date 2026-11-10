@@ -6,7 +6,7 @@ This repository is structured for multi-LLM collaboration (Claude Code, GitHub C
 
 ## 1. Mandatory Verification Loop Before Every Commit
 
-Every AI agent making changes to this repository **must** run all three checks below and confirm zero errors before finishing a task:
+Every AI agent making changes to this repository **must** run all four checks below and confirm zero errors before finishing a task:
 
 ```bash
 # 1. Run all unit & security tests (every src/**/*.test.ts, all must pass)
@@ -17,6 +17,9 @@ npm run lint
 
 # 3. Run production Vite bundle build (must exit 0)
 npm run build
+
+# 4. Run the hermetic end-to-end browser suite (phone, small phone, landscape phone, tablet, desktop)
+npm run test:e2e
 ```
 
 ---
@@ -40,7 +43,7 @@ When asked to fix bugs or improve playback reliability across platforms, address
   - Add direct audio stream extraction or `<audio crossOrigin="anonymous">` playback fallback connected to `sharedAudioEngine`, while keeping `YouTubeStreamBridge` as a fallback when direct stream URLs are unavailable.
 
 ### Priority 3: Persistent User Library (Liked Songs, Playlists & Queue) — PARTLY IMPLEMENTED (`src/utils/persistence.ts`)
-- **Status**: library, likes, download flags, volume, shuffle / repeat, autoplay and EQ gains persist in `localStorage`. `persistence.ts` can also save / restore the queue, position and radio session (`toPersistedState` / `fromPersistedState`), but the UI only uses that once it moves onto `src/player/playerCore.ts`. Playlists are not persisted yet.
+- **Status**: library, likes, download flags, volume, shuffle / repeat, autoplay and EQ gains persist in `localStorage`. The queue, current song, position and radio session persist too and are restored (paused) on launch (`usePlayer.ts` → `persistence.ts`). Playlists are not persisted yet.
 - **Original symptom**: Liked songs (`liked`), offline cache toggles (`cachedOffline`), EQ gains (`eqGains`), and custom queue order reset on page reload because state in `src/App.tsx` is currently held in React memory (`useState`).
 - **Target Files**: `src/App.tsx`.
 - **Recommended Solution**:

@@ -1,24 +1,28 @@
 import React from 'react';
+import { STREAM_ERROR_API_UNAVAILABLE } from '../player/effectPolicies';
+import type { StreamStatus } from '../player/playerCore';
 
-/**
+/*
+ * Stream status reported to the player core:
  * - `loading`:   the player (or a new video) is still being set up
  * - `buffering`: the stream is stalled waiting for data
  * - `playing` / `paused`: self-explanatory
  * - `blocked`:   the browser refused to start audio without a tap on the player itself
  *                (iOS Safari, strict autoplay policies) — the player is revealed so it can be tapped
  */
-export type StreamStatus = 'loading' | 'buffering' | 'playing' | 'paused' | 'blocked';
-
-/** Error code reported when the YouTube IFrame API script itself cannot be loaded (offline, blocked). */
-export const STREAM_ERROR_API_UNAVAILABLE = -1;
 
 interface YouTubeStreamBridgeProps {
   videoId: string;
   isPlaying: boolean;
   volume: number; // 0..1
   isMuted: boolean;
-  seekRequestMs: number | null;
-  onSeekHandled?: () => void;
+  /** A new `token` asks for a seek; it is reported handled only once it was applied. */
+  seekRequest: { token: number; ms: number } | null;
+  onSeekHandled: (token: number) => void;
+  /** Where a newly created player starts (read whenever the player is created). */
+  initialPositionMs: number;
+  /** Changing it tears the player down and creates it again (network retry). */
+  retryNonce: number;
   onStatusChange: (status: StreamStatus) => void;
   onTimeUpdateMs: (currentMs: number, durationMs?: number) => void;
   onEnded: () => void;
@@ -131,7 +135,7 @@ function loadYouTubeIframeApi(listener: ApiListener) {
 }
 
 export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) => {
-  const { videoId, isPlaying, volume, isMuted, seekRequestMs } = props;
+  const { videoId, isPlaying, volume, isMuted, seekRequest, retryNonce } = props;
 
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const playerRef = React.useRef<YTPlayerInstance | null>(null);
@@ -142,6 +146,8 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
   const watchdogRef = React.useRef<number | null>(null);
   const settleTimerRef = React.useRef<number | null>(null);
   const initPlayerRef = React.useRef<() => void>(() => {});
+  /** A seek requested before the player was ready: applied (and reported) on ready. */
+  const pendingSeekRef = React.useRef<{ token: number; ms: number } | null>(null);
   const [isBlocked, setIsBlocked] = React.useState(false);
 
   // Always call the latest callbacks / read the latest props from long-lived player event handlers.
@@ -191,7 +197,28 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
     }
   }, []);
 
-  // Mount the YouTube IFrame player once
+  /**
+   * Seeks the player. A cued / unstarted video is re-cued at the position instead: `seekTo` on a
+   * cued video starts playing it, which would break a paused restore.
+   */
+  const applySeek = React.useCallback((player: YTPlayerInstance, request: { token: number; ms: number }) => {
+    const seconds = Math.max(0, request.ms / 1000);
+    try {
+      const state = player.getPlayerState();
+      const idle = state === YT_STATE.UNSTARTED || state === YT_STATE.CUED;
+      if (idle && !latest.current.isPlaying) {
+        player.cueVideoById(loadedVideoIdRef.current, seconds);
+      } else {
+        player.seekTo(seconds, true);
+        if (latest.current.isPlaying) player.playVideo();
+      }
+    } catch {
+      // ignore transient player state
+    }
+    latest.current.onSeekHandled(request.token);
+  }, []);
+
+  // Mount the YouTube IFrame player (again whenever `retryNonce` changes)
   React.useEffect(() => {
     let disposed = false;
     const host = hostRef.current;
@@ -223,6 +250,8 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
             rel: 0,
             playsinline: 1,
           };
+          const startSeconds = Math.floor(Math.max(0, latest.current.initialPositionMs) / 1000);
+          if (startSeconds > 0) playerVars.start = startSeconds;
           if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
             playerVars.origin = window.location.origin;
           }
@@ -247,6 +276,11 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                     else ev.target.cueVideoById(wanted, 0);
                   } else if (latest.current.isPlaying) {
                     ev.target.playVideo();
+                  }
+                  const pendingSeek = pendingSeekRef.current;
+                  if (pendingSeek) {
+                    pendingSeekRef.current = null;
+                    applySeek(ev.target, pendingSeek);
                   }
                   if (latest.current.isPlaying) armStartWatchdog();
                   else latest.current.onStatusChange('paused');
@@ -329,7 +363,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
       }
       host?.replaceChildren();
     };
-  }, [applyVolume, armStartWatchdog, clearWatchdog]);
+  }, [applySeek, applyVolume, armStartWatchdog, clearWatchdog, retryNonce]);
 
   // Switch video when a different track (or an alternate upload of the same track) is selected
   React.useEffect(() => {
@@ -379,20 +413,15 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
     applyVolume(playerRef.current);
   }, [volume, isMuted, applyVolume]);
 
-  // Sync explicit user seek requests (scrubbing, restart)
+  // Sync explicit seek requests (scrubbing, restart). Before the player is ready they are kept.
+  const seekToken = seekRequest?.token;
   React.useEffect(() => {
-    if (seekRequestMs === null) return;
+    const request = latest.current.seekRequest;
+    if (!request) return;
     const player = playerRef.current;
-    if (player && isReadyRef.current) {
-      try {
-        player.seekTo(seekRequestMs / 1000, true);
-        if (latest.current.isPlaying) player.playVideo();
-      } catch {
-        // ignore
-      }
-    }
-    latest.current.onSeekHandled?.();
-  }, [seekRequestMs]);
+    if (player && isReadyRef.current) applySeek(player, request);
+    else pendingSeekRef.current = request;
+  }, [seekToken, applySeek]);
 
   // Poll current playback time & full song duration every 250ms while playing
   React.useEffect(() => {

@@ -20,6 +20,17 @@ const __dirname = path.dirname(__filename);
 const MAX_CACHE_ENTRIES = 200;
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const UPSTREAM_TIMEOUT_MS = 8000;
+const DEFAULT_RATE_LIMIT_PER_MINUTE = 240;
+
+/**
+ * Requests per IP per minute. `RATE_LIMIT_PER_MINUTE` may raise it for trusted setups (the end-to-end
+ * suite loads the app hundreds of times from one address); anything that is not a positive integer
+ * keeps the default.
+ */
+function readRateLimitPerMinute(raw: string | undefined): number {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : DEFAULT_RATE_LIMIT_PER_MINUTE;
+}
 
 function setBoundedCache<T>(
   cache: Map<string, { timestamp: number; payload: T }>,
@@ -82,7 +93,7 @@ async function startServer() {
   // CodeQL-compliant per-IP rate limiter across all API and static file routes (240 requests per 60s window)
   const rateLimiterMiddleware = rateLimit({
     windowMs: 60_000,
-    limit: 240,
+    limit: readRateLimitPerMinute(process.env.RATE_LIMIT_PER_MINUTE),
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Rate limit exceeded. Please try again shortly.' },
@@ -243,7 +254,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Metrolist KMP Server running on http://localhost:${PORT}`);
+    console.log(`Metrolist server running on http://localhost:${PORT}`);
   });
 }
 

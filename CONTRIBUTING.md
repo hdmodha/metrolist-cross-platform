@@ -30,6 +30,11 @@ Before opening a Pull Request, please ensure all unit tests and TypeScript check
 # Run every unit test (player core, queue rules, InnerTube parsers, persistence, security)
 npm test
 
+# End-to-end browser tests (Playwright + Chromium; builds the app and starts its servers itself).
+# Hermetic: YouTube, the API and artwork are simulated, no internet needed.
+npx playwright install chromium   # once per machine
+npm run test:e2e
+
 # Run TypeScript type checking
 npm run lint
 

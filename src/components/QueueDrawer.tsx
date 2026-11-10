@@ -9,96 +9,186 @@ import {
   Shuffle,
   Repeat,
   Repeat1,
+  ListX,
 } from 'lucide-react';
 import type { MetrolistTrack } from '../data/metrolistData';
-import { formatDurationMs } from '../utils/metrolistCore';
 import type { RepeatMode } from '../player/queueRules';
+import { formatDurationMs } from '../utils/metrolistCore';
+import { countRender } from '../utils/renderProbe';
+import { SpectrumMeter } from './SpectrumMeter';
+
+export type DrawerTab = 'QUEUE' | 'EQ';
 
 interface QueueDrawerProps {
-  activeTab: 'QUEUE' | 'EQ';
-  onTabChange: (tab: 'QUEUE' | 'EQ') => void;
-  activeTrack: MetrolistTrack;
+  activeTab: DrawerTab;
+  onTabChange: (tab: DrawerTab) => void;
+  activeTrackId: string;
+  activeTrackIsLive: boolean;
   queue: MetrolistTrack[];
   /** Tracks the listener added by hand (they play before automatic radio picks). */
   userQueuedIds: ReadonlySet<string>;
-  onSelectTrack: (track: MetrolistTrack) => void;
-  onMoveQueueItem: (index: number, direction: -1 | 1) => void;
+  onPlayQueueItem: (trackId: string) => void;
+  onMoveQueueItem: (trackId: string, direction: -1 | 1) => void;
   onRemoveQueueItem: (trackId: string) => void;
+  onClearUpcoming: () => void;
   shuffleEnabled: boolean;
   onToggleShuffle: () => void;
   repeatMode: RepeatMode;
   onCycleRepeatMode: () => void;
   eqGains: number[];
   onChangeEqGain: (bandIdx: number, gainDb: number) => void;
-  frequencyLevels: number[];
+  onResetEq: () => void;
+  /** A local (synthesized) song is playing, so the spectrum has something to show. */
+  spectrumActive: boolean;
 }
 
 const EQ_BAND_LABELS = ['60 Hz', '230 Hz', '910 Hz', '3.6 kHz', '14 kHz'];
 
-function getSpectrumHeightClass(level: number): string {
-  if (level >= 85) return 'h-full';
-  if (level >= 70) return 'h-4/5';
-  if (level >= 55) return 'h-3/5';
-  if (level >= 40) return 'h-2/5';
-  if (level >= 25) return 'h-1/3';
-  return 'h-1/5';
+interface QueueRowProps {
+  track: MetrolistTrack;
+  isCurrent: boolean;
+  isHandQueued: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  onPlay: (trackId: string) => void;
+  onMove: (trackId: string, direction: -1 | 1) => void;
+  onRemove: (trackId: string) => void;
 }
 
-export const QueueDrawer: React.FC<QueueDrawerProps> = ({
+const QueueRow = React.memo(function QueueRow({
+  track,
+  isCurrent,
+  isHandQueued,
+  isFirst,
+  isLast,
+  onPlay,
+  onMove,
+  onRemove,
+}: QueueRowProps) {
+  return (
+    <li
+      className={`flex items-center justify-between gap-1.5 p-2 rounded-xl border ${
+        isCurrent ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-white/5 bg-zinc-950/60'
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onPlay(track.id)}
+        aria-current={isCurrent ? 'true' : undefined}
+        aria-label={`${isCurrent ? 'Now playing' : 'Play'} ${track.title} by ${track.artist}`}
+        className="tap-target flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer rounded-lg py-0.5"
+      >
+        <Play className={`w-3.5 h-3.5 shrink-0 ${isCurrent ? 'text-emerald-400 fill-current' : 'text-zinc-400'}`} />
+        <div className="min-w-0 flex-1">
+          <div className={`text-xs font-semibold truncate ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
+            {track.title}
+          </div>
+          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 min-w-0">
+            {isCurrent && (
+              <span className="shrink-0 rounded px-1 py-px bg-emerald-500/20 text-emerald-300 font-semibold">
+                Now playing
+              </span>
+            )}
+            {!isCurrent && isHandQueued && (
+              <span className="shrink-0 rounded px-1 py-px bg-indigo-500/20 text-indigo-300 font-semibold">
+                Queued
+              </span>
+            )}
+            <span className="truncate">
+              {track.artist} · {formatDurationMs(track.durationMs)}
+            </span>
+          </div>
+        </div>
+      </button>
+
+      <div className="flex items-center shrink-0">
+        <button
+          type="button"
+          aria-label={`Move ${track.title} up in queue`}
+          disabled={isFirst}
+          onClick={() => onMove(track.id, -1)}
+          className="tap-target inline-flex items-center justify-center p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
+        >
+          <ArrowUp className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label={`Move ${track.title} down in queue`}
+          disabled={isLast}
+          onClick={() => onMove(track.id, 1)}
+          className="tap-target inline-flex items-center justify-center p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
+        >
+          <ArrowDown className="w-3.5 h-3.5" />
+        </button>
+        {!isCurrent && (
+          <button
+            type="button"
+            aria-label={`Remove ${track.title} from queue`}
+            onClick={() => onRemove(track.id)}
+            className="tap-target inline-flex items-center justify-center p-1.5 rounded text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    </li>
+  );
+});
+
+export const QueueDrawer = React.memo(function QueueDrawer({
   activeTab,
   onTabChange,
-  activeTrack,
+  activeTrackId,
+  activeTrackIsLive,
   queue,
   userQueuedIds,
-  onSelectTrack,
+  onPlayQueueItem,
   onMoveQueueItem,
   onRemoveQueueItem,
+  onClearUpcoming,
   shuffleEnabled,
   onToggleShuffle,
   repeatMode,
   onCycleRepeatMode,
   eqGains,
   onChangeEqGain,
-  frequencyLevels,
-}) => {
-  const activeQueueIdx = queue.findIndex((item) => item.id === activeTrack.id);
-  const repeatLabel =
-    repeatMode === 'OFF' ? 'Repeat off' : repeatMode === 'ALL' ? 'Repeat all' : 'Repeat one';
+  onResetEq,
+  spectrumActive,
+}: QueueDrawerProps) {
+  countRender('QueueDrawer');
+  const activeQueueIdx = queue.findIndex((item) => item.id === activeTrackId);
+  const upcomingCount = Math.max(0, queue.length - activeQueueIdx - 1);
+  const repeatLabel = repeatMode === 'OFF' ? 'Repeat off' : repeatMode === 'ALL' ? 'Repeat all' : 'Repeat one';
+
+  const tabClass = (active: boolean) =>
+    `tap-target flex items-center justify-center gap-1.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+      active ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-white'
+    }`;
+  const chipClass = (active: boolean) =>
+    `tap-target inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-full border font-semibold cursor-pointer transition-colors ${
+      active ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-white/10 text-zinc-400 hover:text-white'
+    }`;
 
   return (
     <div className="w-full rounded-2xl border border-white/10 bg-zinc-900/90 flex flex-col overflow-hidden">
-      {/* Clean Spotify-Style Drawer Header */}
       <div className="p-2.5 border-b border-white/10">
-        <div
-          role="tablist"
-          aria-label="Inspector Drawer Tabs"
-          className="grid grid-cols-2 w-full p-1 rounded-full bg-zinc-950/90"
-        >
+        <div role="tablist" aria-label="Inspector Drawer Tabs" className="grid grid-cols-2 w-full p-1 rounded-full bg-zinc-950/90">
           <button
             type="button"
             role="tab"
             aria-selected={activeTab === 'QUEUE'}
             onClick={() => onTabChange('QUEUE')}
-            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'QUEUE'
-                ? 'bg-zinc-800 text-emerald-400'
-                : 'text-zinc-400 hover:text-white'
-            }`}
+            className={tabClass(activeTab === 'QUEUE')}
           >
             <ListMusic className="w-3.5 h-3.5" />
             <span>Queue ({queue.length})</span>
           </button>
-
           <button
             type="button"
             role="tab"
             aria-selected={activeTab === 'EQ'}
             onClick={() => onTabChange('EQ')}
-            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'EQ'
-                ? 'bg-zinc-800 text-emerald-400'
-                : 'text-zinc-400 hover:text-white'
-            }`}
+            className={tabClass(activeTab === 'EQ')}
           >
             <Sliders className="w-3.5 h-3.5" />
             <span>EQ</span>
@@ -106,146 +196,68 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
         </div>
       </div>
 
-      {/* Tab 1: Dynamic Queue Manager */}
       {activeTab === 'QUEUE' && (
-        <div className="p-4 flex-1 flex flex-col space-y-3">
+        <div className="p-3 sm:p-4 flex-1 flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
             <span className="font-semibold text-white">
               Queue
-              <span className="font-mono tabular-nums font-normal text-zinc-400">
-                {' '}
-                · {Math.max(0, queue.length - activeQueueIdx - 1)} up next
-              </span>
+              <span className="font-mono tabular-nums font-normal text-zinc-400"> · {upcomingCount} up next</span>
             </span>
 
             {/* Shuffle & repeat live here too so they are reachable on phones */}
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                aria-pressed={shuffleEnabled}
-                onClick={onToggleShuffle}
-                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border font-semibold cursor-pointer transition-colors ${
-                  shuffleEnabled
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                    : 'border-white/10 text-zinc-400 hover:text-white'
-                }`}
-              >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button type="button" aria-pressed={shuffleEnabled} onClick={onToggleShuffle} className={chipClass(shuffleEnabled)}>
                 <Shuffle className="w-3.5 h-3.5" />
                 <span>Shuffle</span>
               </button>
+              <button type="button" onClick={onCycleRepeatMode} className={chipClass(repeatMode !== 'OFF')}>
+                {repeatMode === 'ONE' ? <Repeat1 className="w-3.5 h-3.5" /> : <Repeat className="w-3.5 h-3.5" />}
+                <span>{repeatLabel}</span>
+              </button>
               <button
                 type="button"
-                onClick={onCycleRepeatMode}
-                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border font-semibold cursor-pointer transition-colors ${
-                  repeatMode !== 'OFF'
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                    : 'border-white/10 text-zinc-400 hover:text-white'
-                }`}
+                aria-label="Clear upcoming songs"
+                disabled={upcomingCount === 0}
+                onClick={onClearUpcoming}
+                className={`${chipClass(false)} disabled:opacity-40 disabled:cursor-default`}
               >
-                {repeatMode === 'ONE' ? (
-                  <Repeat1 className="w-3.5 h-3.5" />
-                ) : (
-                  <Repeat className="w-3.5 h-3.5" />
-                )}
-                <span>{repeatLabel}</span>
+                <ListX className="w-3.5 h-3.5" />
+                <span>Clear</span>
               </button>
             </div>
           </div>
 
-          <div className="space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1">
-            {queue.map((item, idx) => {
-              const isCurrent = item.id === activeTrack.id;
-              return (
-                <div
-                  key={`${item.id}-${idx}`}
-                  className={`flex items-center justify-between gap-2 p-2.5 rounded-xl border ${
-                    isCurrent
-                      ? 'border-emerald-500/40 bg-emerald-500/10'
-                      : 'border-white/5 bg-zinc-950/60'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onSelectTrack(item)}
-                    aria-current={isCurrent ? 'true' : undefined}
-                    aria-label={`${isCurrent ? 'Now playing' : 'Play'} ${item.title} by ${item.artist}`}
-                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
-                  >
-                    <Play
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        isCurrent ? 'text-emerald-400 fill-current' : 'text-zinc-400'
-                      }`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className={`text-xs font-semibold truncate ${
-                          isCurrent ? 'text-emerald-400' : 'text-white'
-                        }`}
-                      >
-                        {item.title}
-                      </div>
-                      <div className="text-[11px] text-zinc-400 truncate">
-                        {isCurrent ? 'Now playing · ' : userQueuedIds.has(item.id) ? 'Queued · ' : ''}
-                        {item.artist} · {formatDurationMs(item.durationMs)}
-                      </div>
-                    </div>
-                  </button>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      type="button"
-                      aria-label={`Move ${item.title} up in queue`}
-                      disabled={idx === 0}
-                      onClick={() => onMoveQueueItem(idx, -1)}
-                      className="p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
-                    >
-                      <ArrowUp className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Move ${item.title} down in queue`}
-                      disabled={idx === queue.length - 1}
-                      onClick={() => onMoveQueueItem(idx, 1)}
-                      className="p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
-                    >
-                      <ArrowDown className="w-3.5 h-3.5" />
-                    </button>
-                    {!isCurrent && (
-                      <button
-                        type="button"
-                        aria-label={`Remove ${item.title} from queue`}
-                        onClick={() => onRemoveQueueItem(item.id)}
-                        className="p-1.5 rounded text-rose-400 hover:bg-rose-500/10 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ul aria-label="Up next" className="space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1">
+            {queue.map((item, idx) => (
+              <QueueRow
+                key={item.id}
+                track={item}
+                isCurrent={item.id === activeTrackId}
+                isHandQueued={userQueuedIds.has(item.id)}
+                isFirst={idx === 0}
+                isLast={idx === queue.length - 1}
+                onPlay={onPlayQueueItem}
+                onMove={onMoveQueueItem}
+                onRemove={onRemoveQueueItem}
+              />
+            ))}
+          </ul>
         </div>
       )}
 
-      {/* Tab 2: 5-Band Equalizer & Spectrum Visualizer */}
       {activeTab === 'EQ' && (
         <div className="p-4 flex-1 flex flex-col space-y-4">
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold text-white">5-Band Equalizer</span>
-            <button
-              type="button"
-              onClick={() => [0, 1, 2, 3, 4].forEach((idx) => onChangeEqGain(idx, 0))}
-              className="text-emerald-400 hover:underline cursor-pointer"
-            >
+            <button type="button" onClick={onResetEq} className="text-emerald-400 hover:underline cursor-pointer">
               Reset Flat
             </button>
           </div>
 
-          {activeTrack.isLiveInnerTube && (
+          {activeTrackIsLive && (
             <p className="text-[11px] leading-snug text-zinc-400">
-              The equalizer shapes Local Studio tracks. YouTube Music streams play through
-              YouTube&rsquo;s own player and are not affected.
+              The equalizer shapes Local Studio tracks. YouTube Music streams play through YouTube&rsquo;s own player and
+              are not affected.
             </p>
           )}
 
@@ -254,9 +266,7 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
               <div key={label} className="space-y-1">
                 <div className="flex items-center justify-between text-xs font-mono tabular-nums">
                   <span className="text-zinc-300">{label}</span>
-                  <span className="text-emerald-400">
-                    {eqGains[idx] > 0 ? `+${eqGains[idx]}` : eqGains[idx]} dB
-                  </span>
+                  <span className="text-emerald-400">{eqGains[idx] > 0 ? `+${eqGains[idx]}` : eqGains[idx]} dB</span>
                 </div>
                 <input
                   type="range"
@@ -272,22 +282,12 @@ export const QueueDrawer: React.FC<QueueDrawerProps> = ({
             ))}
           </div>
 
-          {/* Live Frequency Spectrum Bars */}
           <div className="pt-2 border-t border-white/10">
             <div className="text-[11px] font-mono text-zinc-400 mb-2">Audio Spectrum</div>
-            <div className="h-24 flex items-end justify-between gap-1.5 px-2 py-2 rounded-xl bg-zinc-950 border border-white/5">
-              {frequencyLevels.map((lvl, idx) => (
-                <div
-                  key={idx}
-                  className={`flex-1 bg-emerald-500 rounded-t transition-all duration-150 ${getSpectrumHeightClass(
-                    lvl
-                  )}`}
-                />
-              ))}
-            </div>
+            <SpectrumMeter active={spectrumActive} />
           </div>
         </div>
       )}
     </div>
   );
-};
+});

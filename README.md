@@ -21,8 +21,8 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 - **YouTube Music Algorithmic Recommendations (`RDAMVM`)**: Automatically updates the **Recommended for You** shelf and **Up Next Radio Queue** using YouTube Music's official `youtubei/v1/next` recommendation engine whenever a song is played.
 - **5-Band Parametric Equalizer & Spectrum Analyzer**: Built-in Web Audio API BiquadFilter equalizer (`60 Hz` to `14 kHz`).
 - **Works Standalone on Phones**: The packaged Android / iOS app searches YouTube Music directly from the device — no server required.
-- **Real Queue Controls**: Add to queue, reorder, shuffle, repeat (all / one), and Autoplay Radio that tops the queue up when it runs low.
-- **Remembers You**: Liked songs, your library, volume and player preferences are saved on the device.
+- **Real Queue Controls**: Play next, add to queue, reorder, clear, shuffle, repeat (all / one), and an endless Autoplay Radio that loads more songs whenever the queue runs low.
+- **Remembers You**: Liked songs, your library, the queue (resumed paused where you left off), volume and player preferences are saved on the device.
 - **Native OS Media Keys (`MediaSession API`)**: Integrates with macOS Control Center, Windows System Media Transport Controls, iOS Lock Screen, and Android Media Notifications.
 
 ---
@@ -35,6 +35,11 @@ npm install
 
 # Run all unit tests (player core, InnerTube, persistence & security checks)
 npm test
+
+# End-to-end browser tests (Playwright + Chromium; builds the app and starts its servers itself).
+# Hermetic: YouTube, the API and artwork are simulated, no internet needed.
+npx playwright install chromium   # once per machine
+npm run test:e2e
 
 # Start development server (Express + Vite on http://localhost:3000)
 npm run dev

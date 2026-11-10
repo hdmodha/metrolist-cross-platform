@@ -267,6 +267,15 @@ describe('toPersistedState / fromPersistedState', () => {
     assert.equal(player.hasStartedPlayback, false);
   });
 
+  test('a player that never played saves no queue, so a reload starts fresh', () => {
+    const untouched = run(createInitialPlayerState(SEEDS), { type: 'toggleShuffle' });
+    const persisted = toPersistedState(untouched, 0);
+    assert.deepEqual(persisted.queue, []);
+    const { player } = fromPersistedState(persisted, SEEDS);
+    assert.equal(player.hasStartedPlayback, false);
+    assert.equal(player.shuffleEnabled, true);
+  });
+
   test('a long queue is saved as a 200-song window that keeps the playing song', () => {
     const many = Array.from({ length: 260 }, (_, i) => yt(`m${i}`));
     let state = createInitialPlayerState(SEEDS);

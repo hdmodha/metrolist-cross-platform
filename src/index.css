@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
+/* Landscape phones: very little height between the sticky header and the fixed now-playing bar */
+@custom-variant short (@media (max-height: 500px) and (orientation: landscape));
 
 @layer base {
   :root {
@@ -54,11 +56,41 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* Keyboard focus is always visible (mouse / touch focus stays quiet) */
+:focus-visible {
+  outline: 2px solid #34d399;
+  outline-offset: 2px;
+}
+.search-input:focus-visible {
+  outline: none; /* the search box shows its own focus ring */
+}
+
+/* Primary controls get finger-sized hit areas on touch screens (min 40 x 40 px) */
+@media (pointer: coarse) {
+  .tap-target {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+/* Long libraries: rows outside the viewport are not laid out or painted */
+.library-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 57px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .animate-spin {
+    /* A loading indicator must still read as "busy": slow it down instead of freezing it */
+    animation-duration: 2.5s !important;
+    animation-iteration-count: infinite !important;
   }
 }

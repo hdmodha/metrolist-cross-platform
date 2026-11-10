@@ -10,3 +10,7 @@ coverage/
 bun.lock
 bun.lockb
 public/assets/aistudio/
+# Playwright output
+test-results/
+playwright-report/
+blob-report/
