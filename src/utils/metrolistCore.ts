@@ -114,7 +114,10 @@ export function generateSapisidHash(
   timestampSec: number = Math.floor(Date.now() / 1000)
 ): { headerValue: string; timestampSec: number; digestHex: string; isValidInput: boolean } {
   const trimmedToken = sapisidCookie.trim();
-  const cleanOrigin = originUrl.trim().replace(/\/+$/, '');
+  let cleanOrigin = originUrl.trim();
+  while (cleanOrigin.endsWith('/')) {
+    cleanOrigin = cleanOrigin.slice(0, -1);
+  }
   if (!trimmedToken || trimmedToken.length < 8 || !cleanOrigin.startsWith('https://')) {
     return {
       headerValue: '',
@@ -558,9 +561,9 @@ export function buildSanitizedLyricsRequest(
     upgradedToHttps = true;
   }
 
-  // Strip bracketed personal annotations or tracking IDs from title
+  // Strip bracketed personal annotations or tracking IDs from title in O(N) linear time (no regex ReDoS)
   const cleanTitle = hardenedMode
-    ? trackTitle.replace(/\[.*?\]|\(.*?token.*?\)/gi, '').trim()
+    ? stripBracketedAnnotationsLinear(trackTitle)
     : trackTitle;
   const cleanArtist = hardenedMode ? artistName.trim() : artistName;
 
@@ -772,22 +775,72 @@ export function parseInnerTubeWatchNextResponse(
   return results;
 }
 
+function stripBracketedAnnotationsLinear(input: string): string {
+  const capped = input.slice(0, 256);
+  let out = '';
+  let i = 0;
+  while (i < capped.length) {
+    const ch = capped[i];
+    if (ch === '[') {
+      const closeIdx = capped.indexOf(']', i + 1);
+      if (closeIdx !== -1) {
+        i = closeIdx + 1;
+        continue;
+      }
+    } else if (ch === '(') {
+      const closeIdx = capped.indexOf(')', i + 1);
+      if (closeIdx !== -1) {
+        const segment = capped.slice(i + 1, closeIdx).toLowerCase();
+        if (segment.includes('token')) {
+          i = closeIdx + 1;
+          continue;
+        }
+      }
+    }
+    out += ch;
+    i++;
+  }
+  return out.trim();
+}
+
 /**
  * 9. Production API Input Sanitizer & YouTube VideoID Validator
  * Strips control characters, HTML angle brackets, and enforces strict length bounds
- * to protect backend InnerTube & LRCLIB proxy routes against injection and memory DoS.
+ * in O(N) linear time without regular expressions.
  */
 export function sanitizeApiQueryText(raw: unknown, maxLength: number = 120): string {
   if (typeof raw !== 'string') return '';
-  return raw
-    .replace(/[\u0000-\u001F\u007F<>]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, maxLength);
+  const limit = Math.min(raw.length, 512);
+  let out = '';
+  let prevSpace = true;
+
+  for (let i = 0; i < limit; i++) {
+    const code = raw.charCodeAt(i);
+    const ch = raw[i];
+    const isControlOrBracket =
+      code <= 0x1f || code === 0x7f || ch === '<' || ch === '>';
+    const isWhitespace =
+      isControlOrBracket || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+
+    if (isWhitespace) {
+      if (!prevSpace && out.length < maxLength) {
+        out += ' ';
+        prevSpace = true;
+      }
+    } else {
+      if (out.length < maxLength) {
+        out += ch;
+        prevSpace = false;
+      }
+    }
+  }
+
+  return out.trim();
 }
 
 export function isValidYouTubeVideoId(raw: unknown): boolean {
   if (typeof raw !== 'string') return false;
   return /^[A-Za-z0-9_-]{11}$/.test(raw.trim());
 }
+
 

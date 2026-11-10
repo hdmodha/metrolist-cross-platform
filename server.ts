@@ -49,9 +49,9 @@ async function startServer() {
     next();
   });
 
-  // Lightweight per-IP rate limiter on /api/* (120 requests per 60s window)
+  // Global per-IP rate limiter across all API and static file routes (240 requests per 60s window)
   const ipRateMap = new Map<string, { count: number; resetAt: number }>();
-  app.use('/api', (req, res, next) => {
+  const rateLimiterMiddleware: express.RequestHandler = (req, res, next) => {
     const ip = req.ip || req.socket.remoteAddress || 'local';
     const now = Date.now();
     const record = ipRateMap.get(ip);
@@ -62,12 +62,13 @@ async function startServer() {
       return;
     }
     record.count += 1;
-    if (record.count > 120) {
+    if (record.count > 240) {
       res.status(429).json({ error: 'Rate limit exceeded. Please try again shortly.' });
       return;
     }
     next();
-  });
+  };
+  app.use(rateLimiterMiddleware);
 
   // Bounded in-memory caches for <2ms response times on repeated searches, recommendations & stream resolutions
   const searchCache = new Map<string, { timestamp: number; payload: unknown }>();
@@ -261,13 +262,24 @@ async function startServer() {
         true
       );
 
+      const lrcUrl = new URL(sanitizedLrcReq.finalUrl);
+
       const searchTerm = `${title} ${artist}`.trim();
-      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
-        searchTerm
-      )}&entity=song&limit=3`;
+      const itunesUrl = new URL('https://itunes.apple.com/search');
+      itunesUrl.searchParams.set('term', searchTerm);
+      itunesUrl.searchParams.set('entity', 'song');
+      itunesUrl.searchParams.set('limit', '3');
+
+      if (
+        lrcUrl.origin !== 'https://lrclib.net' ||
+        itunesUrl.origin !== 'https://itunes.apple.com'
+      ) {
+        res.status(400).json({ error: 'Invalid upstream origin.' });
+        return;
+      }
 
       const [lrcRes, audioRes] = await Promise.allSettled([
-        fetch(sanitizedLrcReq.finalUrl, {
+        fetch(lrcUrl, {
           headers: { 'User-Agent': 'Metrolist-KMP/2.0 (https://github.com/metrolistgroup/metrolist)' },
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
         }).then((r) => (r.ok ? r.json() : [])),
@@ -322,7 +334,7 @@ async function startServer() {
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+    app.get('*', rateLimiterMiddleware, (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
