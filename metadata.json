@@ -1,6 +1,6 @@
 {
-  "name": "Metrolist KMP — Cross-Platform Music Client & Migration Suite",
-  "description": "Cross-platform Kotlin Multiplatform (KMP) and Compose Multiplatform implementation of the Metrolist YouTube Music client for iOS, macOS, and Windows with live audio playback, synced lyrics, Listen Together Jam, InnerTube stream resolution, and security hardening.",
+  "name": "Metrolist",
+  "description": "Metrolist is an ad-free, cross-platform music player for Android, iOS, macOS, Windows and the web, with live YouTube Music search and radio recommendations.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

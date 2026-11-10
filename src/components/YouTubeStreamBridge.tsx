@@ -379,7 +379,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
     applyVolume(playerRef.current);
   }, [volume, isMuted, applyVolume]);
 
-  // Sync explicit user seek requests (scrubbing, clicking synced lyrics, restart)
+  // Sync explicit user seek requests (scrubbing, restart)
   React.useEffect(() => {
     if (seekRequestMs === null) return;
     const player = playerRef.current;

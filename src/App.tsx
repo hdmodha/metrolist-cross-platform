@@ -9,7 +9,6 @@ import {
   Repeat1,
   Volume2,
   VolumeX,
-  Mic2,
   ListMusic,
   Sliders,
   Radio,
@@ -20,21 +19,22 @@ import {
   type MetrolistTrack,
 } from './data/metrolistData';
 import {
-  buildPlayNowQueue,
-  computeDeterministicHashHex,
-  deriveLyricsSearchTerms,
+  deriveSongSearchTerms,
   formatDurationMs,
+  type InnerTubeParsedTrack,
+} from './utils/metrolistCore';
+import {
+  buildPlayNowQueue,
   insertIntoQueueAfterCurrent,
   mergeRadioIntoQueue,
   pickNextQueueIndex,
-  type InnerTubeParsedTrack,
   type RepeatMode,
-} from './utils/metrolistCore';
-import { fetchRecommendations, fetchSyncedLyrics, searchTracks } from './utils/apiClient';
+} from './player/queueRules';
+import { fetchRecommendations, searchTracks } from './utils/apiClient';
 import { loadPlayerState, savePlayerState } from './utils/persistence';
 import { sharedAudioEngine } from './utils/webAudioSynth';
 import { PlayerLibraryView, STATIC_YTM_FALLBACK } from './components/PlayerLibraryView';
-import { LyricsAndQueueDrawer } from './components/LyricsAndQueueDrawer';
+import { QueueDrawer } from './components/QueueDrawer';
 import {
   STREAM_ERROR_API_UNAVAILABLE,
   YouTubeStreamBridge,
@@ -46,10 +46,6 @@ const MAX_PLAY_HISTORY = 50;
 /** Alternate uploads tried for one song before giving up on it. */
 const MAX_VIDEO_CANDIDATES_PER_TRACK = 3;
 const MAX_CONSECUTIVE_STREAM_FAILURES = 3;
-
-function buildPlaceholderLrc(title: string, artist: string, message: string): string {
-  return [`[00:00.00] ${title} — ${artist}`, `[00:06.00] ${message}`].join('\n');
-}
 
 function convertRecommendationToTrack(ytTrack: InnerTubeParsedTrack): MetrolistTrack {
   const fullSongDurationMs = ytTrack.durationMs > 30000 ? ytTrack.durationMs : 218000;
@@ -65,15 +61,9 @@ function convertRecommendationToTrack(ytTrack: InnerTubeParsedTrack): MetrolistT
     chordIntervals: [0, 3, 7, 10],
     coverUrl:
       ytTrack.thumbnailUrl || `https://i.ytimg.com/vi/${ytTrack.videoId}/hqdefault.jpg`,
-    accentColor: '#10B981',
     genre: 'YouTube Music',
     liked: false,
     cachedOffline: false,
-    cacheSizeMb: 6.4,
-    sha256Checksum: computeDeterministicHashHex(ytTrack.videoId),
-    lyricsSource: 'LRCLIB',
-    rawLrc: buildPlaceholderLrc(ytTrack.title, ytTrack.artist, 'Looking for synced lyrics…'),
-    streamCandidates: INITIAL_TRACKS[0].streamCandidates,
     isLiveInnerTube: true,
   };
 }
@@ -140,7 +130,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = React.useState<string>('');
   const [selectedGenre, setSelectedGenre] = React.useState<string>('All');
   const [libraryFilter, setLibraryFilter] = React.useState<'ALL' | 'LIKED' | 'CACHED'>('ALL');
-  const [drawerTab, setDrawerTab] = React.useState<'LYRICS' | 'QUEUE' | 'EQ'>('LYRICS');
+  const [drawerTab, setDrawerTab] = React.useState<'QUEUE' | 'EQ'>('QUEUE');
   const [eqGains, setEqGains] = React.useState<number[]>(persisted.eqGains);
   const [frequencyLevels, setFrequencyLevels] = React.useState<number[]>(IDLE_SPECTRUM);
 
@@ -182,7 +172,6 @@ export default function App() {
 
   const playHistoryRef = React.useRef<string[]>([]);
   const hasStartedPlaybackRef = React.useRef(false);
-  const lyricsResolvedRef = React.useRef<Set<string>>(new Set());
   const triedVideoIdsRef = React.useRef<Map<string, Set<string>>>(new Map());
   const consecutiveStreamFailuresRef = React.useRef(0);
   const noticeCounterRef = React.useRef(0);
@@ -206,26 +195,6 @@ export default function App() {
     setTracks(apply);
     setQueue(apply);
   }, []);
-
-  // Resolve LRCLIB synced lyrics once per YouTube Music track
-  const resolveSyncedLyricsForTrack = React.useCallback(
-    async (track: MetrolistTrack) => {
-      if (lyricsResolvedRef.current.has(track.id)) return;
-      lyricsResolvedRef.current.add(track.id);
-      const syncedLrc = await fetchSyncedLyrics({
-        videoId: track.videoId,
-        title: track.title,
-        artist: track.artist,
-        durationMs: track.durationMs,
-      });
-      patchTrack(track.id, {
-        rawLrc:
-          syncedLrc ||
-          buildPlaceholderLrc(track.title, track.artist, 'No synced lyrics available for this song'),
-      });
-    },
-    [patchTrack]
-  );
 
   /** Starts `track` from the beginning. Callers are responsible for shaping the queue first. */
   const startTrack = React.useCallback(
@@ -256,12 +225,8 @@ export default function App() {
       setSeekRequestMs(previousId === track.id ? 0 : null);
       setStreamStatus(track.isLiveInnerTube ? 'loading' : 'paused');
       setIsPlaying(true);
-
-      if (track.isLiveInnerTube) {
-        void resolveSyncedLyricsForTrack(track);
-      }
     },
-    [resolveSyncedLyricsForTrack]
+    []
   );
 
   const restartCurrentTrack = React.useCallback(() => {
@@ -344,7 +309,7 @@ export default function App() {
       { videoId: seed.videoId, title: seed.title, artist: seed.artist },
       controller.signal
     )
-      .then((recs) => {
+      .then(({ tracks: recs }) => {
         if (controller.signal.aborted) return;
         const usable = recs.filter((r) => r.videoId !== seed.videoId);
         if (usable.length === 0) {
@@ -455,12 +420,9 @@ export default function App() {
     const state = latest.current;
     if (!state.isPlaying) {
       hasStartedPlaybackRef.current = true;
-      if (state.activeTrack.isLiveInnerTube) {
-        void resolveSyncedLyricsForTrack(state.activeTrack);
-      }
     }
     setIsPlaying(!state.isPlaying);
-  }, [resolveSyncedLyricsForTrack]);
+  }, []);
 
   const handleSeekToMs = React.useCallback((ms: number) => {
     const duration = latest.current.activeTrack.durationMs;
@@ -586,7 +548,6 @@ export default function App() {
     const currentId = hasStartedPlaybackRef.current ? activeTrack.id : null;
     setQueue((prev) => buildPlayNowQueue(prev, currentId, track, userQueuedIds));
     startTrack(track);
-    setDrawerTab('LYRICS');
   };
 
   const handleAddToQueue = (track: MetrolistTrack) => {
@@ -678,7 +639,7 @@ export default function App() {
     setRepeatMode((prev) => (prev === 'OFF' ? 'ALL' : prev === 'ALL' ? 'ONE' : 'OFF'));
   };
 
-  const handleOpenDrawerTab = (tab: 'LYRICS' | 'QUEUE' | 'EQ') => {
+  const handleOpenDrawerTab = (tab: 'QUEUE' | 'EQ') => {
     setDrawerTab(tab);
     if (typeof window !== 'undefined' && window.innerWidth < 1280) {
       document.getElementById('inspector-drawer')?.scrollIntoView({ behavior: 'smooth' });
@@ -726,7 +687,7 @@ export default function App() {
       triedVideoIdsRef.current.set(failed.id, tried);
       if (tried.size < MAX_VIDEO_CANDIDATES_PER_TRACK) {
         try {
-          const terms = deriveLyricsSearchTerms(failed.title, failed.artist);
+          const terms = deriveSongSearchTerms(failed.title, failed.artist);
           const candidates = await searchTracks(`${terms.artistName} ${terms.trackName}`.trim());
           const alternate = candidates.find((c) => !tried.has(c.videoId));
           if (latest.current.activeTrack.id !== failed.id) return;
@@ -859,7 +820,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Area: Single-Page Home & Music + Synced Lyrics / Up Next Queue Drawer */}
+      {/* Main Content Area: Single-Page Home & Music + Up Next Queue / EQ Drawer */}
       <main className="flex-1 max-w-[1600px] w-full mx-auto px-4 sm:px-6 pt-5 pb-[calc(7rem+env(safe-area-inset-bottom))]">
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
           <div className="xl:col-span-8 min-w-0">
@@ -886,15 +847,13 @@ export default function App() {
 
           <aside
             id="inspector-drawer"
-            aria-label="Live Lyrics, Queue, and Equalizer Inspector"
+            aria-label="Queue and Equalizer Inspector"
             className="xl:col-span-4 xl:sticky xl:top-20 scroll-mt-20"
           >
-            <LyricsAndQueueDrawer
+            <QueueDrawer
               activeTab={drawerTab}
               onTabChange={setDrawerTab}
               activeTrack={activeTrack}
-              currentTimeMs={currentTimeMs}
-              onSeekToMs={handleSeekToMs}
               queue={queue}
               userQueuedIds={userQueuedIds}
               onSelectTrack={(track) => handleSelectAndPlay(track)}
@@ -907,7 +866,6 @@ export default function App() {
               eqGains={eqGains}
               onChangeEqGain={handleUpdateEqGain}
               frequencyLevels={frequencyLevels}
-              hardenedSecurityMode={true}
             />
           </aside>
         </div>
@@ -1041,20 +999,6 @@ export default function App() {
 
             {/* Right: Drawer Quick Switchers (Visible on Mobile & Desktop) & Master Volume */}
             <div className="shrink-0 sm:col-span-3 flex items-center justify-end gap-0.5 sm:gap-2">
-              <button
-                type="button"
-                aria-label="Show Synced Lyrics Panel"
-                onClick={() => handleOpenDrawerTab('LYRICS')}
-                className={`p-1.5 sm:p-2 rounded-lg transition-colors cursor-pointer ${
-                  drawerTab === 'LYRICS'
-                    ? 'text-emerald-400 bg-emerald-500/10'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-                title="Synced Lyrics"
-              >
-                <Mic2 className="w-4 h-4" />
-              </button>
-
               <button
                 type="button"
                 aria-label="Show Dynamic Queue Panel"

@@ -1,6 +1,6 @@
 # Contributing to Metrolist Cross-Platform
 
-Thank you for contributing to **Metrolist**! This project provides a fast, ad-free, cross-platform music player powered by YouTube Music (`InnerTube WEB_REMIX`) and synced `LRCLIB` lyrics for **macOS, Windows, Android, iOS, and Web**.
+Thank you for contributing to **Metrolist**! This project provides a fast, ad-free, cross-platform music player powered by YouTube Music (`InnerTube WEB_REMIX`) for **macOS, Windows, Android, iOS, and Web**.
 
 ---
 
@@ -27,8 +27,8 @@ Thank you for contributing to **Metrolist**! This project provides a fast, ad-fr
 Before opening a Pull Request, please ensure all unit tests and TypeScript checks pass:
 
 ```bash
-# Run the core InnerTube, Recommendation, and Security unit tests
-npx tsx --test src/utils/metrolistCore.test.ts
+# Run every unit test (player core, queue rules, InnerTube parsers, persistence, security)
+npm test
 
 # Run TypeScript type checking
 npm run lint

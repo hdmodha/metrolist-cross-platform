@@ -9,8 +9,8 @@ This repository is structured for multi-LLM collaboration (Claude Code, GitHub C
 Every AI agent making changes to this repository **must** run all three checks below and confirm zero errors before finishing a task:
 
 ```bash
-# 1. Run unit & security tests (all must pass)
-npx tsx --test src/utils/metrolistCore.test.ts
+# 1. Run all unit & security tests (every src/**/*.test.ts, all must pass)
+npm test
 
 # 2. Run TypeScript compiler typecheck (must exit 0)
 npm run lint
@@ -27,11 +27,11 @@ When asked to fix bugs or improve playback reliability across platforms, address
 
 ### Priority 1: Standalone Mobile APK / Static Client API Fallback — IMPLEMENTED (`src/utils/apiClient.ts`)
 - **Status**: `VITE_API_BASE_URL` support plus a direct InnerTube path through Capacitor's native HTTP bridge are in place. Still to do: verify on a real device build.
-- **Original symptom**: In the Capacitor Android `.apk` (`com.metrolist.music`), the app runs inside an Android WebView at `https://localhost` without the Node.js `server.ts` backend running on the device. Relative calls to `/api/innertube/search`, `/api/innertube/recommendations`, and `/api/innertube/resolve` fail unless a remote backend URL or client-side fallback is configured.
+- **Original symptom**: In the Capacitor Android `.apk` (`com.metrolist.music`), the app runs inside an Android WebView at `https://localhost` without the Node.js `server.ts` backend running on the device. Relative calls to `/api/innertube/search` and `/api/innertube/recommendations` fail unless a remote backend URL or client-side fallback is configured.
 - **Target Files**: `src/App.tsx`, `src/components/PlayerLibraryView.tsx`, `capacitor.config.json`.
 - **Recommended Solution**:
   - Introduce an `API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''` helper.
-  - Add a resilient client-side fallback when `/api/innertube/*` is unreachable in standalone mobile builds (e.g., querying `https://lrclib.net/api/search` directly for synced lyrics and using CORS-enabled music search/stream endpoints).
+  - Add a resilient client-side fallback when `/api/innertube/*` is unreachable in standalone mobile builds (e.g., using CORS-enabled music search/stream endpoints).
 
 ### Priority 2: Unified Audio Element & Web Audio EQ for Live Streams
 - **Symptom**: `src/components/YouTubeStreamBridge.tsx` plays live YouTube Music tracks via a hidden `1x1` YouTube IFrame (`www.youtube.com`). Because cross-origin `<iframe>` audio cannot be routed into a Web Audio `MediaElementAudioSourceNode`, the 5-band parametric EQ and real-time FFT visualizer in `src/utils/webAudioSynth.ts` only affect synthesized audio rather than the YouTube IFrame output, and mobile WebViews may block unmuted background iframe playback.
@@ -40,7 +40,7 @@ When asked to fix bugs or improve playback reliability across platforms, address
   - Add direct audio stream extraction or `<audio crossOrigin="anonymous">` playback fallback connected to `sharedAudioEngine`, while keeping `YouTubeStreamBridge` as a fallback when direct stream URLs are unavailable.
 
 ### Priority 3: Persistent User Library (Liked Songs, Playlists & Queue) — PARTLY IMPLEMENTED (`src/utils/persistence.ts`)
-- **Status**: library, likes, download flags, volume, shuffle / repeat, autoplay and EQ gains persist in `localStorage`. Playlists and the queue itself are not persisted yet.
+- **Status**: library, likes, download flags, volume, shuffle / repeat, autoplay and EQ gains persist in `localStorage`. `persistence.ts` can also save / restore the queue, position and radio session (`toPersistedState` / `fromPersistedState`), but the UI only uses that once it moves onto `src/player/playerCore.ts`. Playlists are not persisted yet.
 - **Original symptom**: Liked songs (`liked`), offline cache toggles (`cachedOffline`), EQ gains (`eqGains`), and custom queue order reset on page reload because state in `src/App.tsx` is currently held in React memory (`useState`).
 - **Target Files**: `src/App.tsx`.
 - **Recommended Solution**:

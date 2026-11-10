@@ -1,6 +1,6 @@
 # Metrolist — Cross-Platform Ad-Free Music Player
 
-A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, Android, and Web**, powered by **YouTube Music (`InnerTube WEB_REMIX`)**, **YouTube Radio (`RDAMVM`) recommendations**, and **LRCLIB time-synced lyrics**.
+A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, Android, and Web**, powered by **YouTube Music (`InnerTube WEB_REMIX`)** and **YouTube Radio (`RDAMVM`) recommendations**.
 
 ---
 
@@ -19,7 +19,6 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 
 - **Full-Length Ad-Free Streaming**: Searches and streams full-length songs from YouTube Music (`WEB_REMIX`) with zero audio interruptions.
 - **YouTube Music Algorithmic Recommendations (`RDAMVM`)**: Automatically updates the **Recommended for You** shelf and **Up Next Radio Queue** using YouTube Music's official `youtubei/v1/next` recommendation engine whenever a song is played.
-- **Live Time-Synced Lyrics (`LRCLIB`)**: Interactive `.lrc` lyrics with click-to-seek timestamps.
 - **5-Band Parametric Equalizer & Spectrum Analyzer**: Built-in Web Audio API BiquadFilter equalizer (`60 Hz` to `14 kHz`).
 - **Works Standalone on Phones**: The packaged Android / iOS app searches YouTube Music directly from the device — no server required.
 - **Real Queue Controls**: Add to queue, reorder, shuffle, repeat (all / one), and Autoplay Radio that tops the queue up when it runs low.
@@ -34,8 +33,8 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 # Install dependencies
 npm install
 
-# Run unit tests (InnerTube, Recommendations & Security checks)
-npx tsx --test src/utils/metrolistCore.test.ts
+# Run all unit tests (player core, InnerTube, persistence & security checks)
+npm test
 
 # Start development server (Express + Vite on http://localhost:3000)
 npm run dev
