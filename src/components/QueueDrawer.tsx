@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  Mic2,
   ListMusic,
   Sliders,
   ArrowUp,
@@ -12,19 +11,12 @@ import {
   Repeat1,
 } from 'lucide-react';
 import type { MetrolistTrack } from '../data/metrolistData';
-import {
-  findActiveLyricIndex,
-  formatDurationMs,
-  parseSyncedLrc,
-  type RepeatMode,
-} from '../utils/metrolistCore';
+import { formatDurationMs, type RepeatMode } from '../utils/metrolistCore';
 
-interface LyricsAndQueueDrawerProps {
-  activeTab: 'LYRICS' | 'QUEUE' | 'EQ';
-  onTabChange: (tab: 'LYRICS' | 'QUEUE' | 'EQ') => void;
+interface QueueDrawerProps {
+  activeTab: 'QUEUE' | 'EQ';
+  onTabChange: (tab: 'QUEUE' | 'EQ') => void;
   activeTrack: MetrolistTrack;
-  currentTimeMs: number;
-  onSeekToMs: (ms: number) => void;
   queue: MetrolistTrack[];
   /** Tracks the listener added by hand (they play before automatic radio picks). */
   userQueuedIds: ReadonlySet<string>;
@@ -38,7 +30,6 @@ interface LyricsAndQueueDrawerProps {
   eqGains: number[];
   onChangeEqGain: (bandIdx: number, gainDb: number) => void;
   frequencyLevels: number[];
-  hardenedSecurityMode: boolean;
 }
 
 const EQ_BAND_LABELS = ['60 Hz', '230 Hz', '910 Hz', '3.6 kHz', '14 kHz'];
@@ -52,12 +43,10 @@ function getSpectrumHeightClass(level: number): string {
   return 'h-1/5';
 }
 
-export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
+export const QueueDrawer: React.FC<QueueDrawerProps> = ({
   activeTab,
   onTabChange,
   activeTrack,
-  currentTimeMs,
-  onSeekToMs,
   queue,
   userQueuedIds,
   onSelectTrack,
@@ -70,29 +59,7 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
   eqGains,
   onChangeEqGain,
   frequencyLevels,
-  hardenedSecurityMode,
 }) => {
-  const parsedLyrics = React.useMemo(
-    () => parseSyncedLrc(activeTrack.rawLrc, hardenedSecurityMode),
-    [activeTrack.rawLrc, hardenedSecurityMode]
-  );
-
-  const activeLineIdx = React.useMemo(
-    () => findActiveLyricIndex(parsedLyrics.lines, currentTimeMs),
-    [parsedLyrics.lines, currentTimeMs]
-  );
-
-  // Keep the sung line centred inside the lyrics box (scrolls the box only, never the page)
-  const lyricsBoxRef = React.useRef<HTMLDivElement | null>(null);
-  const activeLineRef = React.useRef<HTMLButtonElement | null>(null);
-  React.useEffect(() => {
-    const box = lyricsBoxRef.current;
-    const line = activeLineRef.current;
-    if (activeTab !== 'LYRICS' || !box || !line) return;
-    const top = line.offsetTop - box.clientHeight / 2 + line.clientHeight / 2;
-    box.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-  }, [activeLineIdx, activeTab, activeTrack.id]);
-
   const activeQueueIdx = queue.findIndex((item) => item.id === activeTrack.id);
   const repeatLabel =
     repeatMode === 'OFF' ? 'Repeat off' : repeatMode === 'ALL' ? 'Repeat all' : 'Repeat one';
@@ -104,23 +71,8 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
         <div
           role="tablist"
           aria-label="Inspector Drawer Tabs"
-          className="grid grid-cols-3 w-full p-1 rounded-full bg-zinc-950/90"
+          className="grid grid-cols-2 w-full p-1 rounded-full bg-zinc-950/90"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'LYRICS'}
-            onClick={() => onTabChange('LYRICS')}
-            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'LYRICS'
-                ? 'bg-zinc-800 text-emerald-400'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            <Mic2 className="w-3.5 h-3.5" />
-            <span>Lyrics</span>
-          </button>
-
           <button
             type="button"
             role="tab"
@@ -153,56 +105,7 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
         </div>
       </div>
 
-      {/* Tab 1: Live Synced Lyrics */}
-      {activeTab === 'LYRICS' && (
-        <div className="p-4 flex-1 flex flex-col space-y-3">
-          <div className="flex items-center justify-between gap-2 text-xs">
-            <span className="text-zinc-300 font-semibold whitespace-nowrap">Synced Lyrics</span>
-            <span className="text-zinc-400 whitespace-nowrap">Tap a line to seek</span>
-          </div>
-
-          <div
-            ref={lyricsBoxRef}
-            className="relative space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1"
-          >
-            {parsedLyrics.lines.map((line, index) => {
-              const isCurrent = index === activeLineIdx;
-              return (
-                <button
-                  key={`${line.timeMs}-${index}`}
-                  ref={isCurrent ? activeLineRef : undefined}
-                  aria-current={isCurrent ? 'true' : undefined}
-                  type="button"
-                  onClick={() => onSeekToMs(line.timeMs)}
-                  className={`w-full text-left px-3 py-2 rounded-xl transition-colors cursor-pointer block ${
-                    isCurrent
-                      ? 'bg-white/10 text-white'
-                      : 'hover:bg-white/5 text-zinc-400'
-                  }`}
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span
-                      className={`text-sm leading-snug ${
-                        isCurrent ? 'font-bold text-emerald-400' : 'font-medium'
-                      }`}
-                    >
-                      {line.text}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-500 tabular-nums shrink-0">
-                      {line.formattedTime}
-                    </span>
-                  </div>
-                  {line.translation && (
-                    <div className="text-xs text-zinc-400 mt-0.5">{line.translation}</div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: Dynamic Queue Manager */}
+      {/* Tab 1: Dynamic Queue Manager */}
       {activeTab === 'QUEUE' && (
         <div className="p-4 flex-1 flex flex-col space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
@@ -324,7 +227,7 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
         </div>
       )}
 
-      {/* Tab 3: 5-Band Equalizer & Spectrum Visualizer */}
+      {/* Tab 2: 5-Band Equalizer & Spectrum Visualizer */}
       {activeTab === 'EQ' && (
         <div className="p-4 flex-1 flex flex-col space-y-4">
           <div className="flex items-center justify-between text-xs">

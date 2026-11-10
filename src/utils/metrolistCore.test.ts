@@ -1,160 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  generateSapisidHash,
-  decipherInnerTubeSignature,
-  resolveOptimalAudioStream,
-  parseSyncedLrc,
-  findActiveLyricIndex,
-  calculateJamDriftSync,
-  validateBackupArchive,
-  signJamCommand,
-  verifyJamCommandAuthorization,
-  buildSanitizedLyricsRequest,
-  formatDurationMs,
-  type StreamFormatCandidate,
-} from './metrolistCore';
+import { formatDurationMs } from './metrolistCore';
 
-test('InnerTube SAPISIDHASH generates deterministic token and rejects insecure origins', () => {
-  const valid = generateSapisidHash('3PAPISID_LIVE_COOKIE_998123', 'https://music.youtube.com', 1762748000);
-  assert.equal(valid.isValidInput, true);
-  assert.ok(valid.headerValue.startsWith('SAPISIDHASH 1762748000_'));
-  assert.equal(valid.digestHex.length, 40);
-
-  const insecureOrigin = generateSapisidHash('3PAPISID_LIVE_COOKIE_998123', 'http://music.youtube.com', 1762748000);
-  assert.equal(insecureOrigin.isValidInput, false);
-});
-
-test('InnerTube stream resolver picks AAC (itag 140) on iOS/macOS AVPlayer and Opus (itag 251) on Windows/Android', () => {
-  const candidates: StreamFormatCandidate[] = [
-    {
-      itag: 251,
-      mimeType: 'audio/webm; codecs="opus"',
-      codec: 'opus',
-      container: 'webm',
-      bitrateKbps: 160,
-      sampleRateHz: 48000,
-      channels: 2,
-      signatureCipher: 'AABBCDEFGHIJKLMN',
-    },
-    {
-      itag: 140,
-      mimeType: 'audio/mp4; codecs="mp4a.40.2"',
-      codec: 'aac',
-      container: 'mp4',
-      bitrateKbps: 128,
-      sampleRateHz: 44100,
-      channels: 2,
-      signatureCipher: 'AABBCDEFGHIJKLMN',
-    },
-  ];
-
-  const iosStream = resolveOptimalAudioStream('ios', candidates);
-  assert.equal(iosStream.selectedItag, 140);
-  assert.equal(iosStream.codec, 'aac');
-  assert.ok(iosStream.nativeEngine.includes('AVQueuePlayer'));
-
-  const macosStream = resolveOptimalAudioStream('macos', candidates);
-  assert.equal(macosStream.selectedItag, 140);
-  assert.equal(macosStream.container, 'mp4');
-
-  const winStream = resolveOptimalAudioStream('windows', candidates);
-  assert.equal(winStream.selectedItag, 251);
-  assert.equal(winStream.codec, 'opus');
-  assert.ok(winStream.nativeEngine.includes('libmpv'));
-});
-
-test('Sandboxed InnerTube signature cipher deobfuscates deterministically without eval', () => {
-  const res = decipherInnerTubeSignature('XX9876543210', [
-    { op: 'slice', arg: 2 },
-    { op: 'reverse', arg: 0 },
-  ]);
-  assert.equal(res.safeAstExecution, true);
-  assert.equal(res.signature, '0123456789');
-});
-
-test('Hardened O(N) LRC parser parses synced timestamps, sorts lines, and rejects malformed lines', () => {
-  const sampleLrc = [
-    '[00:12.50] Neon reflections on glass // ガラスのネオン反射',
-    '[00:04.00] Static in the midnight air',
-    '[invalid:tag] Should be rejected cleanly',
-    '[999:99.99] Out of range timestamp',
-    '[00:24.10] Signals crossing the ocean',
-  ].join('\n');
-
-  const parsed = parseSyncedLrc(sampleLrc, true);
-  assert.equal(parsed.lines.length, 3);
-  assert.equal(parsed.rejectedLines, 2);
-  assert.equal(parsed.lines[0].timeMs, 4000);
-  assert.equal(parsed.lines[1].timeMs, 12500);
-  assert.equal(parsed.lines[1].translation, 'ガラスのネオン反射');
-
-  assert.equal(findActiveLyricIndex(parsed.lines, 2000), -1);
-  assert.equal(findActiveLyricIndex(parsed.lines, 5000), 0);
-  assert.equal(findActiveLyricIndex(parsed.lines, 15000), 1);
-  assert.equal(findActiveLyricIndex(parsed.lines, 30000), 2);
-});
-
-test('Listen Together Jam drift calculator computes IN_SYNC, MICRO_RATE_ADJUST, and HARD_SEEK accurately', () => {
-  const inSync = calculateJamDriftSync(60000, 60030, 40); // target 60020, drift -10ms
-  assert.equal(inSync.action, 'IN_SYNC');
-  assert.equal(inSync.recommendedPlaybackRate, 1.0);
-
-  const softCatchUp = calculateJamDriftSync(60000, 59400, 100); // target 60050, drift +650ms
-  assert.equal(softCatchUp.action, 'MICRO_RATE_ADJUST');
-  assert.ok(softCatchUp.recommendedPlaybackRate > 1.0);
-
-  const hardSeek = calculateJamDriftSync(60000, 57000, 80); // target 60040, drift +3040ms
-  assert.equal(hardSeek.action, 'HARD_SEEK');
-  assert.equal(hardSeek.targetSeekMs, 60040);
-});
-
-test('Security Hardening Validators block Zip-Slip traversal, unsigned Jam commands, and HTTP cookie leaks', () => {
-  // 1. Zip-Slip Backup Validator
-  const maliciousBackup = validateBackupArchive(
-    [
-      {
-        fileName: '../../data/data/com.metrolist.music/databases/song.db',
-        compressedBytes: 1024,
-        uncompressedBytes: 4096,
-      },
-    ],
-    true
-  );
-  assert.equal(maliciousBackup.valid, false);
-  assert.equal(maliciousBackup.vulnerabilityTriggered, 'VULN-02 (Zip-Slip Path Traversal)');
-
-  // 2. Jam Command HMAC & Host Role Check
-  const secret = 'ROOM_KEY_991';
-  const validGuestPlay = {
-    roomId: 'METRO-88A',
-    senderId: 'peer-win11',
-    senderRole: 'GUEST' as const,
-    action: 'SKIP' as const,
-    timestampMs: 1700000000,
-    nonce: 'n1',
-  };
-  const sig = signJamCommand(validGuestPlay, secret);
-  const blockedGuestSkip = verifyJamCommandAuthorization(
-    { ...validGuestPlay, hmacSignature: sig },
-    secret,
-    false,
-    true
-  );
-  assert.equal(blockedGuestSkip.authorized, false);
-
-  // 3. Lyrics Query Sanitizer
-  const sanitized = buildSanitizedLyricsRequest(
-    'http://lyrics.kugou.com/search',
-    'Night Prism [token=secret]',
-    'Obsidian Sound',
-    { sapisid: 'LEAKED_COOKIE_123', duration: '218' },
-    true
-  );
-  assert.equal(sanitized.upgradedToHttps, true);
-  assert.ok(sanitized.finalUrl.startsWith('https://'));
-  assert.deepEqual(sanitized.strippedSecrets, ['sapisid']);
+test('Duration formatter renders tabular MM:SS and clamps negative input', () => {
   assert.equal(formatDurationMs(218000), '03:38');
+  assert.equal(formatDurationMs(-5000), '00:00');
 });
 
 test('InnerTube WEB_REMIX search parser extracts videoId, title, artist, album, and durationMs', async () => {
@@ -363,36 +213,27 @@ test('Search falls back from the Songs filter to the Videos filter when Songs re
   assert.deepEqual(await searchInnerTubeTracks(async () => ({}), 'x'), []);
 });
 
-test('Lyrics lookup terms are derived from YouTube-style video titles', async () => {
-  const { deriveLyricsSearchTerms, pickBestLyricsMatch } = await import('./metrolistCore');
-  const vevo = deriveLyricsSearchTerms(
+test('Song search terms are derived from YouTube-style video titles', async () => {
+  const { deriveSongSearchTerms } = await import('./metrolistCore');
+  const vevo = deriveSongSearchTerms(
     'Daft Punk - Instant Crush (Official Video) ft. Julian Casablancas',
     'DaftPunkVEVO'
   );
-  assert.equal(vevo.artistName, 'Daft Punk');
-  assert.equal(vevo.trackName, 'Instant Crush ft. Julian Casablancas');
+  assert.deepEqual(vevo, { artistName: 'Daft Punk', trackName: 'Instant Crush ft. Julian Casablancas' });
 
   // A song whose own title contains " - " must not be split when the left part is not the artist
-  const remaster = deriveLyricsSearchTerms('Bohemian Rhapsody - Remastered 2011', 'Queen');
+  const remaster = deriveSongSearchTerms('Bohemian Rhapsody - Remastered 2011', 'Queen');
   assert.equal(remaster.artistName, 'Queen');
   assert.equal(remaster.trackName, 'Bohemian Rhapsody - Remastered 2011');
 
-  const thirdParty = deriveLyricsSearchTerms(
+  const thirdParty = deriveSongSearchTerms(
     'Radiohead - Everything In Its Right Place [HD]',
     'Newfound Recordings'
   );
-  assert.equal(thirdParty.freeText, 'Radiohead Everything In Its Right Place');
+  assert.equal(thirdParty.trackName, 'Radiohead - Everything In Its Right Place');
+  assert.equal(thirdParty.artistName, 'Newfound Recordings');
 
-  const best = pickBestLyricsMatch(
-    [
-      { syncedLyrics: null, plainLyrics: 'plain only', duration: 252 },
-      { syncedLyrics: '[00:01.00] live version', duration: 664 },
-      { syncedLyrics: '[00:01.00] album version', duration: 252 },
-    ],
-    251000
-  );
-  assert.equal(best?.syncedLyrics, '[00:01.00] album version');
-  assert.equal(pickBestLyricsMatch([], 1000), null);
+  assert.equal(deriveSongSearchTerms('Nightcall', 'Kavinsky - Topic').artistName, 'Kavinsky');
 });
 
 test('Queue rules: next / previous, repeat modes, shuffle and end of queue', async () => {

@@ -6,10 +6,8 @@ import { createServer as createViteServer } from 'vite';
 import {
   INNERTUBE_API_ORIGIN,
   INNERTUBE_ENDPOINT_URLS,
-  deriveLyricsSearchTerms,
   fetchInnerTubeRadioTracks,
   isValidYouTubeVideoId,
-  pickBestLyricsMatch,
   sanitizeApiQueryText,
   searchInnerTubeTracks,
   type InnerTubeTransport,
@@ -21,7 +19,6 @@ const __dirname = path.dirname(__filename);
 const MAX_CACHE_ENTRIES = 200;
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const UPSTREAM_TIMEOUT_MS = 8000;
-const LRCLIB_ORIGIN = 'https://lrclib.net';
 
 function setBoundedCache<T>(
   cache: Map<string, { timestamp: number; payload: T }>,
@@ -62,21 +59,6 @@ const innerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
   }
   return response.json();
 };
-
-async function fetchLrcLibSearch(params: Record<string, string>): Promise<unknown> {
-  const url = new URL(`${LRCLIB_ORIGIN}/api/search`);
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
-  if (url.origin !== LRCLIB_ORIGIN) {
-    throw new Error('Invalid lyrics upstream origin.');
-  }
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'Metrolist-KMP/2.0 (https://github.com/metrolistgroup/metrolist)' },
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-  });
-  return response.ok ? response.json() : [];
-}
 
 async function startServer() {
   const app = express();
@@ -121,9 +103,8 @@ async function startServer() {
     next();
   });
 
-  // Bounded in-memory caches for <2ms response times on repeated searches, recommendations & stream resolutions
+  // Bounded in-memory caches for <2ms response times on repeated searches & recommendations
   const searchCache = new Map<string, { timestamp: number; payload: unknown }>();
-  const resolveCache = new Map<string, { timestamp: number; payload: unknown }>();
   const recommendationsCache = new Map<string, { timestamp: number; payload: unknown }>();
 
   /**
@@ -210,68 +191,6 @@ async function startServer() {
       res.json(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Recommendation engine error';
-      res.status(502).json({ error: message });
-    }
-  });
-
-  /**
-   * 3. Synced Lyrics Resolver (`/api/innertube/resolve`)
-   */
-  app.get('/api/innertube/resolve', async (req, res) => {
-    const title = sanitizeApiQueryText(req.query.title, 120);
-    const artist = sanitizeApiQueryText(req.query.artist, 120);
-    const videoId = sanitizeApiQueryText(req.query.videoId, 32);
-    const requestedDurationMs = Number(sanitizeApiQueryText(req.query.durationMs, 12));
-    const durationMs =
-      Number.isFinite(requestedDurationMs) && requestedDurationMs > 0 ? requestedDurationMs : 0;
-
-    if (!title) {
-      res.status(400).json({ error: 'Missing track title.' });
-      return;
-    }
-
-    const cacheKey = `${videoId}:${title.toLowerCase()}:${artist.toLowerCase()}`;
-    const cached = resolveCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-      res.json(cached.payload);
-      return;
-    }
-
-    try {
-      // YouTube titles look like "Artist - Song (Official Video)": reduce them to clean lookup terms
-      const terms = deriveLyricsSearchTerms(title, artist);
-
-      let bestMatch = pickBestLyricsMatch(
-        await fetchLrcLibSearch({ track_name: terms.trackName, artist_name: terms.artistName }),
-        durationMs
-      );
-      if (!bestMatch?.syncedLyrics && terms.freeText) {
-        // Second chance: free-text search across title / artist / album
-        const freeTextMatch = pickBestLyricsMatch(
-          await fetchLrcLibSearch({ q: terms.freeText }),
-          durationMs
-        );
-        if (freeTextMatch?.syncedLyrics || !bestMatch) {
-          bestMatch = freeTextMatch;
-        }
-      }
-
-      const syncedLrc = bestMatch?.syncedLyrics || '';
-      const payload = {
-        videoId,
-        title,
-        artist,
-        directAudioUrl: '',
-        syncedLrc,
-        plainLyrics: bestMatch?.plainLyrics || '',
-        lyricsProvider: syncedLrc ? 'LRCLIB (Live Synced)' : 'InnerTube Generated',
-      };
-      if (syncedLrc) {
-        setBoundedCache(resolveCache, cacheKey, payload);
-      }
-      res.json(payload);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Lyrics resolution error';
       res.status(502).json({ error: message });
     }
   });

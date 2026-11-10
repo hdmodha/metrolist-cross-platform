@@ -31,21 +31,21 @@ This file provides essential architectural context, commands, data flows, known 
 
 ## 2. High-Level Architecture & File Map
 
-The app is a single-page, Spotify-style cross-platform music player inspired by Metrolist (YouTube Music client), built with **React 19 + TypeScript + Tailwind CSS v4 + Vite** on the frontend and an **Express (`server.ts`)** InnerTube/LRCLIB proxy backend.
+The app is a single-page, Spotify-style cross-platform music player inspired by Metrolist (YouTube Music client), built with **React 19 + TypeScript + Tailwind CSS v4 + Vite** on the frontend and an **Express (`server.ts`)** InnerTube proxy backend.
 
 ```text
-├── server.ts                              # Express backend: InnerTube search, RDAMVM recommendations, LRCLIB resolver
+├── server.ts                              # Express backend: InnerTube search, RDAMVM recommendations
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
 ├── src/
 │   ├── App.tsx                            # Root SPA state: playback lifecycle, queue, MediaSession, recommendations
 │   ├── data/
-│   │   └── metrolistData.ts               # Initial seed catalog, TypeScript interfaces (seed covers resolved via `new URL(..., import.meta.url)`)
+│   │   └── metrolistData.ts               # `MetrolistTrack` interface + seed catalog (seed covers resolved via `new URL(..., import.meta.url)`)
 │   ├── components/
 │   │   ├── PlayerLibraryView.tsx          # Main Spotify-style view: Hero card, Live YT Search, Up Next Radio, Library
-│   │   ├── LyricsAndQueueDrawer.tsx       # Right drawer: Synced LRC lyrics, Up Next Queue manager, 5-Band Parametric EQ
+│   │   ├── QueueDrawer.tsx                # Right drawer: Up Next Queue manager, 5-Band Parametric EQ
 │   │   └── YouTubeStreamBridge.tsx        # YouTube IFrame Player API bridge (hidden; revealed only when autoplay needs a tap)
 │   └── utils/
-│       ├── metrolistCore.ts               # Pure logic: InnerTube parsers + shared request layer, queue rules, lyrics terms, sanitizers
+│       ├── metrolistCore.ts               # Pure logic: InnerTube parsers + shared request layer, song search terms, queue rules, sanitizers
 │       ├── metrolistCore.test.ts          # Automated unit test suite (node:test)
 │       ├── apiClient.ts                   # Client network layer: `/api/*` backend, `VITE_API_BASE_URL`, native-shell direct InnerTube
 │       ├── persistence.ts                 # Validated localStorage persistence (library, likes, volume, shuffle/repeat, EQ)
@@ -71,15 +71,11 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
    - `parseInnerTubeWatchNextResponse` extracts recommended tracks (live streams and >20 min mixes are dropped). When `autoplayRadio` is `ON`, `mergeRadioIntoQueue` appends them **only when fewer than 3 songs are left** — it never replaces the queue, so hand-queued songs survive.
 
 3. **Full-Song Audio Playback (`YouTubeStreamBridge.tsx` vs `audioEngine.ts`)**:
-   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge alone drives `currentTimeMs` (the clock never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and updates `durationMs` if the real stream duration exceeds 30s. Player errors trigger a search for another upload of the same song, then a skip; they never fall back to the synth.
+   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge alone drives `currentTimeMs` (the clock never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and updates `durationMs` if the real stream duration exceeds 30s. Player errors trigger a search for another upload of the same song (terms from `deriveSongSearchTerms`), then a skip; they never fall back to the synth.
    - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`) and App handlers through `latest.current` (`App.tsx`). The player is created once; capturing props at mount made "track ended" act on a stale queue.
    - **Local Studio Synth seed tracks (`isLiveInnerTube: false`)**: Synthesized in real time via `src/utils/audioEngine.ts` using Web Audio oscillators + 5-band parametric `BiquadFilterNode` chain.
 
-4. **Synced Lyrics Resolution (`GET /api/innertube/resolve?title=...&artist=...&videoId=...`)**:
-   - `deriveLyricsSearchTerms` cleans YouTube-style titles (`Artist - Song (Official Video)`), then `https://lrclib.net/api/search` is queried by `track_name` + `artist_name` and, failing that, by free-text `q`. `pickBestLyricsMatch` prefers the synced record closest in duration to the stream.
-   - Parsed by `parseLyricsLrc` (`src/utils/metrolistCore.ts`) in linear $O(N)$ time and binary-searched during playback via `findActiveLyricIndex`.
-
-5. **Queue rules (`pickNextQueueIndex`, `insertIntoQueueAfterCurrent`, `buildPlayNowQueue`, `mergeRadioIntoQueue` in `metrolistCore.ts`)**:
+4. **Queue rules (`pickNextQueueIndex`, `insertIntoQueueAfterCurrent`, `buildPlayNowQueue`, `mergeRadioIntoQueue` in `metrolistCore.ts`)**:
    - Pure and unit-tested. Next / Previous / track-ended / repeat (`OFF | ALL | ONE`) / shuffle all go through `skipTrack()` in `App.tsx`. Invariant: the playing track is always in `queue`.
 
 ---
@@ -90,7 +86,7 @@ When debugging or improving the application, prioritize checking these areas:
 
 1. **Standalone Android APK / Mobile WebView Backend Connectivity**:
    - Inside a packaged Capacitor Android `.apk`, the frontend runs on `https://localhost` inside the Android WebView without the Node.js `server.ts` process running locally on the phone.
-   - **Handled in `src/utils/apiClient.ts` — all network calls must go through it, never a bare `fetch('/api/...')`.** Inside the native shell (`window.Capacitor.isNativePlatform()`), search and radio call YouTube Music directly through Capacitor's native HTTP bridge (`Capacitor.nativePromise('CapacitorHttp', 'request', ...)`, no browser CORS), and lyrics call LRCLIB directly (it allows CORS).
+   - **Handled in `src/utils/apiClient.ts` — all network calls must go through it, never a bare `fetch('/api/...')`.** Inside the native shell (`window.Capacitor.isNativePlatform()`), search and radio call YouTube Music directly through Capacitor's native HTTP bridge (`Capacitor.nativePromise('CapacitorHttp', 'request', ...)`, no browser CORS).
    - `VITE_API_BASE_URL` (build-time) points any frontend at a deployed `server.ts`; `/api/*` sends permissive CORS headers for that purpose.
    - A plain static web host (no backend, not a native shell) cannot search: browsers block cross-origin calls to `music.youtube.com`. It needs `VITE_API_BASE_URL`.
    - The native path was verified against a simulated bridge only (no device build in CI): re-test on a real APK after touching `apiClient.ts`.
@@ -116,7 +112,7 @@ GitHub **Dependabot** and **CodeQL** are active on this repository. Preserve the
 2. **CodeQL `js/request-forgery` / SSRF (`server.ts`)**:
    - When making outbound `fetch()` calls with query parameters derived from `req.query`, always construct a `new URL(...)` object, populate parameters with `.searchParams.set(...)`, and explicitly verify `url.origin === 'https://...'` before calling `fetch(url)`.
 3. **CodeQL `js/polynomial-redos` (`src/utils/metrolistCore.ts`)**:
-   - Never use regexes with nested quantifiers or ambiguous `.*?` on user-controlled strings (such as `/\[.*?\]|\(.*?token.*?\)/gi` or `/\/+$/`). Use linear $O(N)$ character loops (`stripBracketedAnnotationsLinear`, `sanitizeApiQueryText`).
+   - Never use regexes with nested quantifiers or ambiguous `.*?` on user-controlled strings (such as `/\[.*?\]|\(.*?token.*?\)/gi` or `/\/+$/`). Use linear $O(N)$ character loops (`stripAllBracketedSegmentsLinear`, `sanitizeApiQueryText`).
 4. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
    - Keep `package-lock.json` committed at the root so GitHub Dependabot can audit exact dependency versions (`vite >= 6.4.6`, `esbuild >= 0.25.0`, `express >= 4.21.2`).
    - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before `npm install --legacy-peer-deps` so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).

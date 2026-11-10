@@ -27,11 +27,11 @@ When asked to fix bugs or improve playback reliability across platforms, address
 
 ### Priority 1: Standalone Mobile APK / Static Client API Fallback — IMPLEMENTED (`src/utils/apiClient.ts`)
 - **Status**: `VITE_API_BASE_URL` support plus a direct InnerTube path through Capacitor's native HTTP bridge are in place. Still to do: verify on a real device build.
-- **Original symptom**: In the Capacitor Android `.apk` (`com.metrolist.music`), the app runs inside an Android WebView at `https://localhost` without the Node.js `server.ts` backend running on the device. Relative calls to `/api/innertube/search`, `/api/innertube/recommendations`, and `/api/innertube/resolve` fail unless a remote backend URL or client-side fallback is configured.
+- **Original symptom**: In the Capacitor Android `.apk` (`com.metrolist.music`), the app runs inside an Android WebView at `https://localhost` without the Node.js `server.ts` backend running on the device. Relative calls to `/api/innertube/search` and `/api/innertube/recommendations` fail unless a remote backend URL or client-side fallback is configured.
 - **Target Files**: `src/App.tsx`, `src/components/PlayerLibraryView.tsx`, `capacitor.config.json`.
 - **Recommended Solution**:
   - Introduce an `API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''` helper.
-  - Add a resilient client-side fallback when `/api/innertube/*` is unreachable in standalone mobile builds (e.g., querying `https://lrclib.net/api/search` directly for synced lyrics and using CORS-enabled music search/stream endpoints).
+  - Add a resilient client-side fallback when `/api/innertube/*` is unreachable in standalone mobile builds (e.g., using CORS-enabled music search/stream endpoints).
 
 ### Priority 2: Unified Audio Element & Web Audio EQ for Live Streams
 - **Symptom**: `src/components/YouTubeStreamBridge.tsx` plays live YouTube Music tracks via a hidden `1x1` YouTube IFrame (`www.youtube.com`). Because cross-origin `<iframe>` audio cannot be routed into a Web Audio `MediaElementAudioSourceNode`, the 5-band parametric EQ and real-time FFT visualizer in `src/utils/webAudioSynth.ts` only affect synthesized audio rather than the YouTube IFrame output, and mobile WebViews may block unmuted background iframe playback.

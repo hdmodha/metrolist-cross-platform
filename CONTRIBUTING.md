@@ -1,6 +1,6 @@
 # Contributing to Metrolist Cross-Platform
 
-Thank you for contributing to **Metrolist**! This project provides a fast, ad-free, cross-platform music player powered by YouTube Music (`InnerTube WEB_REMIX`) and synced `LRCLIB` lyrics for **macOS, Windows, Android, iOS, and Web**.
+Thank you for contributing to **Metrolist**! This project provides a fast, ad-free, cross-platform music player powered by YouTube Music (`InnerTube WEB_REMIX`) for **macOS, Windows, Android, iOS, and Web**.
 
 ---
 

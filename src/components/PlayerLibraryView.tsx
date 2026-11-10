@@ -711,7 +711,7 @@ export const PlayerLibraryView: React.FC<PlayerLibraryViewProps> = ({
                         {track.title}
                       </div>
                       <div className="text-xs text-zinc-400 truncate">
-                        {track.artist} · Lyrics: {track.lyricsSource}
+                        {track.artist}
                       </div>
                     </div>
                   </div>

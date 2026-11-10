@@ -1,5 +1,5 @@
 /**
- * Network layer for search, radio recommendations and synced lyrics.
+ * Network layer for search and radio recommendations.
  *
  * Three runtimes have to work:
  *  1. Browser + Express (`npm run dev`, Docker, desktop bundles): relative `/api/innertube/*` calls.
@@ -10,10 +10,8 @@
  */
 import {
   INNERTUBE_ENDPOINT_URLS,
-  deriveLyricsSearchTerms,
   fetchInnerTubeRadioTracks,
   isValidYouTubeVideoId,
-  pickBestLyricsMatch,
   searchInnerTubeTracks,
   type InnerTubeParsedTrack,
   type InnerTubeTransport,
@@ -212,65 +210,4 @@ export async function fetchRecommendations(
       return fetchInnerTubeRadioTracks(directInnerTubeTransport, seedVideoId);
     }
   );
-}
-
-async function fetchLrcLibDirect(
-  params: Record<string, string>,
-  signal?: AbortSignal
-): Promise<unknown> {
-  const url = new URL('https://lrclib.net/api/search');
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, value);
-  }
-  const timeout = withTimeout(signal);
-  try {
-    const res = await fetch(url, { signal: timeout.signal });
-    return res.ok ? await res.json() : [];
-  } finally {
-    timeout.dispose();
-  }
-}
-
-/** Time-synced LRC lyrics for a track, or `''` when none are available. Never rejects. */
-export async function fetchSyncedLyrics(
-  track: { videoId: string; title: string; artist: string; durationMs: number },
-  signal?: AbortSignal
-): Promise<string> {
-  if (hasBackend()) {
-    try {
-      const data = await fetchBackendJson<{ syncedLrc?: string }>(
-        `/api/innertube/resolve?videoId=${encodeURIComponent(
-          track.videoId
-        )}&title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(
-          track.artist
-        )}&durationMs=${encodeURIComponent(String(Math.round(track.durationMs)))}`,
-        signal
-      );
-      // The backend already tried every LRCLIB lookup: an empty answer is final
-      return data.syncedLrc || '';
-    } catch {
-      // Backend unreachable: fall through to the direct LRCLIB lookup (LRCLIB allows CORS)
-    }
-  }
-  if (signal?.aborted) return '';
-
-  try {
-    const terms = deriveLyricsSearchTerms(track.title, track.artist);
-    let best = pickBestLyricsMatch(
-      await fetchLrcLibDirect(
-        { track_name: terms.trackName, artist_name: terms.artistName },
-        signal
-      ),
-      track.durationMs
-    );
-    if (!best?.syncedLyrics && terms.freeText) {
-      best = pickBestLyricsMatch(
-        await fetchLrcLibDirect({ q: terms.freeText }, signal),
-        track.durationMs
-      );
-    }
-    return best?.syncedLyrics || '';
-  } catch {
-    return '';
-  }
 }
