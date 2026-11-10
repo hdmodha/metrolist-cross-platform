@@ -6,7 +6,7 @@ async function playSomething(app: MetrolistApp): Promise<string> {
   return app.searchAndPlayFirst('daft punk');
 }
 
-/** Dispatches a touch drag on `selector` (pointer events, like a finger). */
+/** Dispatches a touch drag on `selector` (pointer events, like a finger); `durationMs` 0 = an instant flick. */
 async function swipe(app: MetrolistApp, selector: string, dy: number, durationMs: number): Promise<void> {
   await app.page.evaluate(
     async ({ selector, dy, durationMs }) => {
@@ -19,7 +19,8 @@ async function swipe(app: MetrolistApp, selector: string, dy: number, durationMs
       fire(el, 'pointerdown', y);
       const steps = 6;
       for (let i = 1; i <= steps; i++) {
-        await new Promise((resolve) => setTimeout(resolve, durationMs / steps));
+        // Timers stretch under load, which would only make a slow drag slower; a flick is synchronous
+        if (durationMs > 0) await new Promise((resolve) => setTimeout(resolve, durationMs / steps));
         fire(el, 'pointermove', y + (dy * i) / steps);
       }
       fire(el, 'pointerup', y + dy);
@@ -42,7 +43,12 @@ test.describe('Now Playing', () => {
     await page.locator('button[aria-label="Open Now Playing"]:visible').click();
     await expect(app.nowPlaying).toBeVisible();
     await expect(app.nowPlaying).toHaveAttribute('aria-modal', 'true');
-    await expect(app.nowPlaying.getByRole('button', { name: 'Close Now Playing' })).toBeFocused();
+    await expect(app.nowPlaying).toBeFocused();
+    // Space still toggles playback (focus is on the dialog, not on a button)
+    await page.keyboard.press('Space');
+    await expect.poll(() => app.ytState()).toBe(2);
+    await page.keyboard.press('Space');
+    await expect.poll(() => app.ytState()).toBe(1);
     await expect(app.nowPlaying.locator('[data-current-title]')).toHaveText(title);
     await expect(app.nowPlaying).toContainText('Playing from');
     await expect(app.nowPlaying).toContainText('Search');
@@ -117,7 +123,7 @@ test.describe('Now Playing', () => {
 
     // A fast flick is enough too
     await app.openNowPlaying();
-    await swipe(app, art, 70, 60);
+    await swipe(app, art, 70, 0);
     await expect(app.nowPlaying).toHaveCount(0);
   });
 

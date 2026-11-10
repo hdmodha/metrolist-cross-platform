@@ -73,14 +73,14 @@ export const NowPlaying = React.memo(function NowPlaying({
   const { player } = actions;
   const [queueOpen, setQueueOpen] = React.useState(initialQueueOpen);
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
-  const closeRef = React.useRef<HTMLButtonElement | null>(null);
   const queueButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
   const queueId = React.useId();
 
   React.useEffect(() => {
-    closeRef.current?.focus({ preventScroll: true });
+    // Focus the dialog itself (not its close button), so Space keeps toggling playback
+    dialogRef.current?.focus({ preventScroll: true });
     // The page behind must not scroll while the dialog is open
     const root = document.documentElement;
     const previous = root.style.overflow;
@@ -180,9 +180,10 @@ export const NowPlaying = React.memo(function NowPlaying({
       role="dialog"
       aria-modal="true"
       aria-label="Now Playing"
+      tabIndex={-1}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
-      className="slide-up fixed inset-0 z-50 flex bg-zinc-950 text-white overflow-hidden touch-none select-none"
+      className="slide-up fixed inset-0 z-50 flex bg-zinc-950 text-white overflow-hidden touch-none select-none outline-none"
     >
       {/* A soft, blurred copy of the artwork as the backdrop (no pixel reading: thumbnails are cross-origin) */}
       <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -199,7 +200,6 @@ export const NowPlaying = React.memo(function NowPlaying({
         <div className="flex-1 min-w-0 min-h-0 flex flex-col w-full max-w-xl lg:max-w-3xl mx-auto px-5 short:px-4">
           <header className="h-14 short:h-11 shrink-0 grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] items-center gap-2">
             <button
-              ref={closeRef}
               type="button"
               aria-label="Close Now Playing"
               onClick={onClose}
