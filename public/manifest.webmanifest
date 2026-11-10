@@ -1,0 +1,17 @@
+{
+  "name": "Metrolist",
+  "short_name": "Metrolist",
+  "description": "Fast, ad-free music player with live YouTube Music search and radio recommendations, on phones, tablets and desktop.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#09090B",
+  "theme_color": "#09090B",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
