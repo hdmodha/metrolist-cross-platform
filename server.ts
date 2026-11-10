@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -49,25 +50,14 @@ async function startServer() {
     next();
   });
 
-  // Global per-IP rate limiter across all API and static file routes (240 requests per 60s window)
-  const ipRateMap = new Map<string, { count: number; resetAt: number }>();
-  const rateLimiterMiddleware: express.RequestHandler = (req, res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || 'local';
-    const now = Date.now();
-    const record = ipRateMap.get(ip);
-    if (!record || now > record.resetAt) {
-      if (ipRateMap.size > 2000) ipRateMap.clear();
-      ipRateMap.set(ip, { count: 1, resetAt: now + 60_000 });
-      next();
-      return;
-    }
-    record.count += 1;
-    if (record.count > 240) {
-      res.status(429).json({ error: 'Rate limit exceeded. Please try again shortly.' });
-      return;
-    }
-    next();
-  };
+  // CodeQL-compliant per-IP rate limiter across all API and static file routes (240 requests per 60s window)
+  const rateLimiterMiddleware = rateLimit({
+    windowMs: 60_000,
+    limit: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Rate limit exceeded. Please try again shortly.' },
+  });
   app.use(rateLimiterMiddleware);
 
   // Bounded in-memory caches for <2ms response times on repeated searches, recommendations & stream resolutions
