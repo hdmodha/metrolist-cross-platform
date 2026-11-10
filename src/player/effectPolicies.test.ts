@@ -4,7 +4,10 @@ import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import { createInitialPlayerState, playerReducer, type PlayerState } from './playerCore';
 import {
   KEYBOARD_SEEK_STEP_MS,
+  STALL_BEFORE_WAITING_MS,
   STREAM_ERROR_API_UNAVAILABLE,
+  planNetworkRetry,
+  shouldWaitForNetworkAfterStall,
   isPositionSaveDue,
   pickAlternateUpload,
   planStreamErrorRecovery,
@@ -126,5 +129,38 @@ describe('Back clears the search', () => {
       state: { entryPushed: false },
       effect: null,
     });
+  });
+});
+
+describe('network: only a real failure or stall means "waiting for the network"', () => {
+  const stall = (over: Partial<Parameters<typeof shouldWaitForNetworkAfterStall>[0]> = {}) => ({
+    isPlaying: true,
+    isLive: true,
+    streamStatus: 'buffering' as const,
+    stalledForMs: STALL_BEFORE_WAITING_MS,
+    online: false,
+    ...over,
+  });
+
+  test('a live stream stuck loading / buffering for 8 s while offline waits for the network', () => {
+    assert.equal(STALL_BEFORE_WAITING_MS, 8000);
+    assert.equal(shouldWaitForNetworkAfterStall(stall()), true);
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ streamStatus: 'loading' })), true);
+  });
+
+  test('a short blip, a playing stream, an online device or a paused / local song never does', () => {
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ stalledForMs: 7999 })), false);
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ streamStatus: 'playing' })), false, 'still playing from its buffer');
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ online: true })), false);
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ isPlaying: false })), false);
+    assert.equal(shouldWaitForNetworkAfterStall(stall({ isLive: false })), false);
+  });
+
+  test('a retry never re-creates a stream that is playing', () => {
+    assert.equal(planNetworkRetry({ waiting: false, streamStatus: 'loading', retryAttempt: 0 }), null);
+    assert.equal(planNetworkRetry({ waiting: true, streamStatus: 'playing', retryAttempt: 2 }), 'restored');
+    assert.equal(planNetworkRetry({ waiting: true, streamStatus: 'buffering', retryAttempt: 0 }), 'retry');
+    assert.equal(planNetworkRetry({ waiting: true, streamStatus: 'loading', retryAttempt: 4 }), 'retry');
+    assert.equal(planNetworkRetry({ waiting: true, streamStatus: 'paused', retryAttempt: 5 }), 'giveUp');
   });
 });

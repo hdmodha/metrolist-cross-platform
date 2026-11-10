@@ -384,7 +384,8 @@ function playNow(state: PlayerState, track: MetrolistTrack, followUps: Metrolist
       toRefs(followUps.map((t) => t.id))
     )
   );
-  return startTrack({ ...withAll, queueIds }, track.id, { recordHistory: true, userInitiated: true });
+  // A new listening context: the previous radio session must not keep appending its pages
+  return startTrack({ ...withAll, queueIds, radio: null }, track.id, { recordHistory: true, userInitiated: true });
 }
 
 function trackUnplayable(state: PlayerState, trackId: string, random: number): PlayerState {

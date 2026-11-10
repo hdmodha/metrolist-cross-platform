@@ -36,6 +36,11 @@ npm install
 # Run all unit tests (player core, InnerTube, persistence & security checks)
 npm test
 
+# End-to-end browser tests (Playwright + Chromium; builds the app and starts its servers itself).
+# Hermetic: YouTube, the API and artwork are simulated, no internet needed.
+npx playwright install chromium   # once per machine
+npm run test:e2e
+
 # Start development server (Express + Vite on http://localhost:3000)
 npm run dev
 

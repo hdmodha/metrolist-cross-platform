@@ -715,6 +715,22 @@ describe('recommendations and radio', () => {
     assertInvariants(state);
   });
 
+  test('playing something new ends the previous radio session (no stale pages for the old context)', () => {
+    const withRadio = run(started(), {
+      type: 'recommendationsLoaded',
+      trackId: ytId('a'),
+      seedVideoId: vid('a'),
+      tracks: recs('r', 2),
+      continuation: 'TOKEN1',
+    });
+    assert.notEqual(withRadio.radio, null);
+    assert.equal(run(withRadio, { type: 'playFromSearch', track: yt('b') }).radio, null);
+    assert.equal(run(withRadio, { type: 'playFromList', track: SEEDS[0], context: SEEDS }).radio, null);
+    // Moving inside the queue keeps the session going
+    assert.notEqual(run(withRadio, { type: 'next', random: 0 }).radio, null);
+    assert.notEqual(run(withRadio, { type: 'playQueueItem', trackId: ytId('r1') }).radio, null);
+  });
+
   test('a failed recommendations request shows the fallback shelf without the active song', () => {
     const state = run(started(), { type: 'recommendationsFailed', trackId: ytId('a'), fallback: [yt('a'), yt('f1')] });
     assert.deepEqual(state.recommendations.map((r) => r.videoId), [vid('f1')]);

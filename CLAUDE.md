@@ -18,6 +18,12 @@ This file provides essential architectural context, commands, data flows, known 
   ```bash
   npm test
   ```
+- **End-to-End Browser Tests (Playwright, hermetic; starts its own servers)**:
+  ```bash
+  npm run test:e2e                       # all projects: phone, small-phone, landscape-phone, tablet, desktop
+  npx playwright test --project=phone    # one device class
+  ```
+  Every external request is routed to fixtures in `e2e/fixtures/` (fake YouTube IFrame API, API answers, images); an unrouted external request fails the test.
 - **Production Frontend Build (`dist/`)**:
   ```bash
   npm run build
@@ -69,8 +75,12 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
 │       ├── renderProbe.ts                 # countRender(): no-op unless a browser test sets window.__renderProbe
 │       └── webAudioSynth.ts               # Web Audio API 5-band BiquadFilter EQ + real-time FFT spectrum analyzer
 │   (every module has its `*.test.ts` next to it; `npm test` runs them all)
+├── playwright.config.ts                   # E2E: production server + static no-backend server, 5 Chromium device projects
+├── e2e/
+│   ├── fixtures/                          # test.ts (hermetic routes + MetrolistApp driver), fakeYouTube.ts, apiFixtures.ts, ports.ts
+│   └── *.spec.ts                          # search, playback, queue, resilience, persistence, performance, native (no backend), layout
 └── .github/workflows/
-    ├── deploy-pages.yml                   # CI Build, TypeScript check, and unit test workflow on push/PR
+    ├── deploy-pages.yml                   # CI: unit tests, typecheck, build, Playwright e2e (report artifact on failure)
     └── release-native-builds.yml          # Multi-OS release pipeline (Android APK, iOS, macOS, Windows, Web)
 ```
 
@@ -91,7 +101,8 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
    - **Radio continuation**: the same route with `&continuation=<token>` (≤ 1024 chars of `[A-Za-z0-9_\-%=.]`, checked by the linear `sanitizeRadioContinuation`; the seed must be a valid video id) re-sends the WatchNext body plus the URL-decoded token. That answer repeats the first page under `contents`, so only `continuationContents.playlistPanelContinuation` is parsed. Client: `fetchRadioContinuation()` in `apiClient.ts` (backend and native-shell paths). `usePlayer.ts` requests the next page whenever `selectRadioContinuationRequest(state)` is non-null (`radioPageRequested` → `radioPageLoaded` / `radioPageFailed`, retried with back-off via `radioRetry`); an aborted request must still dispatch `radioPageFailed`.
 
 3. **Full-Song Audio Playback (`YouTubeStreamBridge.tsx` vs `webAudioSynth.ts`)**:
-   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge writes the position into the playback clock (it never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and the real duration. Seeks carry a token and are reported handled only once applied (a seek before the player is ready is kept); `initialPositionMs` creates / cues the player at a restored position, paused; a new `retryNonce` re-creates the player (network retry). Player errors follow `planStreamErrorRecovery`: another upload of the same song (`deriveSongSearchTerms`, max 3 per track), then a skip; API unavailable / offline → `networkLost` and back-off retries. Never a synth fallback.
+   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge writes the position into the playback clock (it never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and the real duration. Seeks carry a token and are reported handled only once applied (a seek before the player is ready is kept); `initialPositionMs` creates / cues the player at a restored position, paused; a new `retryNonce` re-creates the player (network retry). Player errors follow `planStreamErrorRecovery`: another upload of the same song (`deriveSongSearchTerms`, max 3 per track), then a skip; API unavailable / an error while offline → `networkLost` and back-off retries. Never a synth fallback.
+   - **Connectivity blips must not interrupt playback** (`effectPolicies.ts`): a window `offline` event alone does nothing (YouTube keeps playing from its buffer). "Waiting for network" starts only on a real failure: the IFrame API cannot load, a player error while `navigator.onLine === false`, or ≥ 8 s stuck in `loading` / `buffering` while offline (`shouldWaitForNetworkAfterStall`). A retry never re-creates a stream whose status is `playing` (`planNetworkRetry` → `networkRestored`).
    - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`); `usePlayer.ts` callbacks read `store.getState()`. The player is long-lived; capturing props at mount made "track ended" act on a stale queue.
    - **Local Studio Synth seed tracks (`isLiveInnerTube: false`)**: Synthesized in real time via `src/utils/webAudioSynth.ts`; `usePlayer.ts` clocks them (250 ms ticks into the playback clock).
    - **Performance rule**: the position lives in `playbackClock.ts`, not React state. Only `SeekBar` (and handlers / persistence / MediaSession via `clock.subscribe`) read it; no component above `SeekBar` may re-render on ticks (the browser suite counts renders through `countRender`).
@@ -134,7 +145,7 @@ GitHub **Dependabot** and **CodeQL** are active on this repository. Preserve the
 0. **Express 5 routing (`server.ts`)**:
    - `express` resolves to 5.x. A bare `'*'` route pattern throws at startup there, so the SPA fallback is a path-less `app.use(rateLimiterMiddleware, ...)`. Always smoke-test `NODE_ENV=production npx tsx server.ts` after touching routes.
 1. **CodeQL `js/missing-rate-limiting` (`server.ts`)**:
-   - Always keep `express-rate-limit` (`rateLimiterMiddleware`) mounted both globally (`app.use(rateLimiterMiddleware)`) and explicitly on any route calling `res.sendFile(...)`. Do not replace `express-rate-limit` with a custom `Map` rate limiter, as CodeQL only recognizes standard library middleware models.
+   - Always keep `express-rate-limit` (`rateLimiterMiddleware`) mounted both globally (`app.use(rateLimiterMiddleware)`) and explicitly on any route calling `res.sendFile(...)`. Do not replace `express-rate-limit` with a custom `Map` rate limiter, as CodeQL only recognizes standard library middleware models. The per-minute limit defaults to 240 and may only be raised through `RATE_LIMIT_PER_MINUTE` (the e2e web server sets it, because the whole suite comes from one IP); never remove the middleware.
 2. **CodeQL `js/request-forgery` / SSRF (`server.ts`)**:
    - When making outbound `fetch()` calls with query parameters derived from `req.query`, always construct a `new URL(...)` object, populate parameters with `.searchParams.set(...)`, and explicitly verify `url.origin === 'https://...'` before calling `fetch(url)`.
 3. **CodeQL `js/polynomial-redos` (`src/utils/metrolistCore.ts`)**:

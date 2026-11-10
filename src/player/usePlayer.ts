@@ -22,10 +22,13 @@ import {
 import { sharedAudioEngine } from '../utils/webAudioSynth';
 import {
   KEYBOARD_SEEK_STEP_MS,
+  STALL_BEFORE_WAITING_MS,
   isPositionSaveDue,
+  planNetworkRetry,
   pickAlternateUpload,
   planStreamErrorRecovery,
   shortcutForKey,
+  shouldWaitForNetworkAfterStall,
 } from './effectPolicies';
 import { createPlaybackClock, type PlaybackClock } from './playbackClock';
 import {
@@ -40,7 +43,7 @@ import {
   type TrackInput,
 } from './playerCore';
 import { createPlayerStore, type PlayerStore } from './playerStore';
-import { canRetryNetwork, computeRetryDelayMs } from './retryPolicy';
+import { computeRetryDelayMs } from './retryPolicy';
 
 const NOTICE_DURATION_MS = 4500;
 const SAVE_DEBOUNCE_MS = 400;
@@ -355,10 +358,20 @@ export function usePlayer() {
 
   const retryNetworkNow = React.useCallback(() => {
     const current = store.getState();
-    if (!current.network.waiting) return;
-    const allowed = canRetryNetwork(current.network.retryAttempt);
-    send({ type: 'networkRetryAttempted' });
-    if (allowed) reinitStream();
+    const plan = planNetworkRetry({
+      waiting: current.network.waiting,
+      streamStatus: current.streamStatus,
+      retryAttempt: current.network.retryAttempt,
+    });
+    if (plan === 'restored') {
+      // The stream plays again on its own: never re-create a playing player (audible gap)
+      send({ type: 'networkRestored' });
+    } else if (plan === 'retry') {
+      send({ type: 'networkRetryAttempted' });
+      reinitStream();
+    } else if (plan === 'giveUp') {
+      send({ type: 'networkRetriesExhausted' });
+    }
   }, [reinitStream, send, store]);
 
   const { waiting: networkWaiting, retryAttempt } = state.network;
@@ -368,19 +381,43 @@ export function usePlayer() {
     return () => window.clearTimeout(timer);
   }, [networkWaiting, retryAttempt, retryNetworkNow]);
 
+  // A live stream stuck loading / buffering for 8 s while offline waits for the network. An
+  // `offline` event alone (a blip while the player plays from its buffer) changes nothing.
+  const stalledSinceRef = React.useRef<number | null>(null);
+  const checkStall = React.useCallback(() => {
+    const current = store.getState();
+    const since = stalledSinceRef.current;
+    if (since === null || current.network.waiting) return;
+    const wait = shouldWaitForNetworkAfterStall({
+      isPlaying: current.isPlaying,
+      isLive: !!selectActiveTrack(current)?.isLiveInnerTube,
+      streamStatus: current.streamStatus,
+      stalledForMs: Date.now() - since,
+      online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    });
+    if (wait) send({ type: 'networkLost' });
+  }, [send, store]);
+
+  const isStalled = state.isPlaying && isLive && (state.streamStatus === 'loading' || state.streamStatus === 'buffering');
+  React.useEffect(() => {
+    if (!isStalled) {
+      stalledSinceRef.current = null;
+      return;
+    }
+    stalledSinceRef.current = Date.now();
+    const timer = window.setTimeout(checkStall, STALL_BEFORE_WAITING_MS);
+    return () => window.clearTimeout(timer);
+  }, [isStalled, checkStall]);
+
   React.useEffect(() => {
     const onOnline = () => retryNetworkNow();
-    const onOffline = () => {
-      const current = store.getState();
-      if (current.isPlaying && selectActiveTrack(current)?.isLiveInnerTube) send({ type: 'networkLost' });
-    };
     window.addEventListener('online', onOnline);
-    window.addEventListener('offline', onOffline);
+    window.addEventListener('offline', checkStall);
     return () => {
       window.removeEventListener('online', onOnline);
-      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('offline', checkStall);
     };
-  }, [retryNetworkNow, send, store]);
+  }, [checkStall, retryNetworkNow]);
 
   // Only a live stream can wait for the network
   React.useEffect(() => {

@@ -6,7 +6,7 @@ This repository is structured for multi-LLM collaboration (Claude Code, GitHub C
 
 ## 1. Mandatory Verification Loop Before Every Commit
 
-Every AI agent making changes to this repository **must** run all three checks below and confirm zero errors before finishing a task:
+Every AI agent making changes to this repository **must** run all four checks below and confirm zero errors before finishing a task:
 
 ```bash
 # 1. Run all unit & security tests (every src/**/*.test.ts, all must pass)
@@ -17,6 +17,9 @@ npm run lint
 
 # 3. Run production Vite bundle build (must exit 0)
 npm run build
+
+# 4. Run the hermetic end-to-end browser suite (phone, small phone, landscape phone, tablet, desktop)
+npm run test:e2e
 ```
 
 ---
