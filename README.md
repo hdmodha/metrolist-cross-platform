@@ -21,6 +21,9 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 - **YouTube Music Algorithmic Recommendations (`RDAMVM`)**: Automatically updates the **Recommended for You** shelf and **Up Next Radio Queue** using YouTube Music's official `youtubei/v1/next` recommendation engine whenever a song is played.
 - **Live Time-Synced Lyrics (`LRCLIB`)**: Interactive `.lrc` lyrics with click-to-seek timestamps.
 - **5-Band Parametric Equalizer & Spectrum Analyzer**: Built-in Web Audio API BiquadFilter equalizer (`60 Hz` to `14 kHz`).
+- **Works Standalone on Phones**: The packaged Android / iOS app searches YouTube Music directly from the device — no server required.
+- **Real Queue Controls**: Add to queue, reorder, shuffle, repeat (all / one), and Autoplay Radio that tops the queue up when it runs low.
+- **Remembers You**: Liked songs, your library, volume and player preferences are saved on the device.
 - **Native OS Media Keys (`MediaSession API`)**: Integrates with macOS Control Center, Windows System Media Transport Controls, iOS Lock Screen, and Android Media Notifications.
 
 ---
@@ -39,7 +42,20 @@ npm run dev
 
 # Build for production
 npm run build
+
+# Run the production server (serves dist/ + the API on http://localhost:3000)
+NODE_ENV=production npx tsx server.ts
 ```
+
+### Hosting the frontend without the bundled server
+
+Static web hosts cannot call YouTube Music directly (browsers block it), so point the build at a deployed backend:
+
+```bash
+VITE_API_BASE_URL="https://your-metrolist-backend.example.com" npm run build
+```
+
+The packaged Android / iOS app does not need this.
 
 ---
 

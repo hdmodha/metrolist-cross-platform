@@ -69,6 +69,17 @@ export class MetrolistWebAudioEngine {
     this.scheduleLoop();
   }
 
+  /**
+   * Creates / resumes the AudioContext. Must be called from inside a user gesture (tap, key press)
+   * at least once: iOS Safari and Android WebViews keep a context suspended otherwise.
+   */
+  public unlock() {
+    this.initContextIfNeeded();
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+  }
+
   public stop() {
     this.isPlaying = false;
     if (this.stepTimer !== null) {

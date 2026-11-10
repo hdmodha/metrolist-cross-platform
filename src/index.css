@@ -26,3 +26,39 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* Horizontal chip rows scroll without showing a scrollbar */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* The search box has its own clear button; hide the browser's native one */
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+html {
+  /* Prevents iOS Safari from inflating text after rotating the device */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  /* No grey flash on tap in Android / iOS WebViews; no rubber-band scroll chaining */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

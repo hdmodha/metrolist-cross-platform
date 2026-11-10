@@ -7,12 +7,16 @@ import {
   ArrowDown,
   Trash2,
   Play,
+  Shuffle,
+  Repeat,
+  Repeat1,
 } from 'lucide-react';
 import type { MetrolistTrack } from '../data/metrolistData';
 import {
   findActiveLyricIndex,
   formatDurationMs,
   parseSyncedLrc,
+  type RepeatMode,
 } from '../utils/metrolistCore';
 
 interface LyricsAndQueueDrawerProps {
@@ -22,9 +26,15 @@ interface LyricsAndQueueDrawerProps {
   currentTimeMs: number;
   onSeekToMs: (ms: number) => void;
   queue: MetrolistTrack[];
+  /** Tracks the listener added by hand (they play before automatic radio picks). */
+  userQueuedIds: ReadonlySet<string>;
   onSelectTrack: (track: MetrolistTrack) => void;
   onMoveQueueItem: (index: number, direction: -1 | 1) => void;
   onRemoveQueueItem: (trackId: string) => void;
+  shuffleEnabled: boolean;
+  onToggleShuffle: () => void;
+  repeatMode: RepeatMode;
+  onCycleRepeatMode: () => void;
   eqGains: number[];
   onChangeEqGain: (bandIdx: number, gainDb: number) => void;
   frequencyLevels: number[];
@@ -49,9 +59,14 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
   currentTimeMs,
   onSeekToMs,
   queue,
+  userQueuedIds,
   onSelectTrack,
   onMoveQueueItem,
   onRemoveQueueItem,
+  shuffleEnabled,
+  onToggleShuffle,
+  repeatMode,
+  onCycleRepeatMode,
   eqGains,
   onChangeEqGain,
   frequencyLevels,
@@ -66,6 +81,21 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
     () => findActiveLyricIndex(parsedLyrics.lines, currentTimeMs),
     [parsedLyrics.lines, currentTimeMs]
   );
+
+  // Keep the sung line centred inside the lyrics box (scrolls the box only, never the page)
+  const lyricsBoxRef = React.useRef<HTMLDivElement | null>(null);
+  const activeLineRef = React.useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    const box = lyricsBoxRef.current;
+    const line = activeLineRef.current;
+    if (activeTab !== 'LYRICS' || !box || !line) return;
+    const top = line.offsetTop - box.clientHeight / 2 + line.clientHeight / 2;
+    box.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }, [activeLineIdx, activeTab, activeTrack.id]);
+
+  const activeQueueIdx = queue.findIndex((item) => item.id === activeTrack.id);
+  const repeatLabel =
+    repeatMode === 'OFF' ? 'Repeat off' : repeatMode === 'ALL' ? 'Repeat all' : 'Repeat one';
 
   return (
     <div className="w-full rounded-2xl border border-white/10 bg-zinc-900/90 flex flex-col overflow-hidden">
@@ -128,15 +158,20 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
         <div className="p-4 flex-1 flex flex-col space-y-3">
           <div className="flex items-center justify-between gap-2 text-xs">
             <span className="text-zinc-300 font-semibold whitespace-nowrap">Synced Lyrics</span>
-            <span className="text-zinc-400 whitespace-nowrap">Click line to seek</span>
+            <span className="text-zinc-400 whitespace-nowrap">Tap a line to seek</span>
           </div>
 
-          <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+          <div
+            ref={lyricsBoxRef}
+            className="relative space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1"
+          >
             {parsedLyrics.lines.map((line, index) => {
               const isCurrent = index === activeLineIdx;
               return (
                 <button
                   key={`${line.timeMs}-${index}`}
+                  ref={isCurrent ? activeLineRef : undefined}
+                  aria-current={isCurrent ? 'true' : undefined}
                   type="button"
                   onClick={() => onSeekToMs(line.timeMs)}
                   className={`w-full text-left px-3 py-2 rounded-xl transition-colors cursor-pointer block ${
@@ -170,12 +205,50 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
       {/* Tab 2: Dynamic Queue Manager */}
       {activeTab === 'QUEUE' && (
         <div className="p-4 flex-1 flex flex-col space-y-3">
-          <div className="flex items-center justify-between text-xs text-zinc-400">
-            <span className="font-semibold text-white">Up Next · YouTube Radio Queue</span>
-            <span className="font-mono tabular-nums">{queue.length} tracks</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+            <span className="font-semibold text-white">
+              Queue
+              <span className="font-mono tabular-nums font-normal text-zinc-400">
+                {' '}
+                · {Math.max(0, queue.length - activeQueueIdx - 1)} up next
+              </span>
+            </span>
+
+            {/* Shuffle & repeat live here too so they are reachable on phones */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                aria-pressed={shuffleEnabled}
+                onClick={onToggleShuffle}
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border font-semibold cursor-pointer transition-colors ${
+                  shuffleEnabled
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-white/10 text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+                <span>Shuffle</span>
+              </button>
+              <button
+                type="button"
+                onClick={onCycleRepeatMode}
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full border font-semibold cursor-pointer transition-colors ${
+                  repeatMode !== 'OFF'
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-white/10 text-zinc-400 hover:text-white'
+                }`}
+              >
+                {repeatMode === 'ONE' ? (
+                  <Repeat1 className="w-3.5 h-3.5" />
+                ) : (
+                  <Repeat className="w-3.5 h-3.5" />
+                )}
+                <span>{repeatLabel}</span>
+              </button>
+            </div>
           </div>
 
-          <div className="space-y-1.5 max-h-[420px] overflow-y-auto pr-1">
+          <div className="space-y-1.5 max-h-[420px] overflow-y-auto overscroll-contain pr-1">
             {queue.map((item, idx) => {
               const isCurrent = item.id === activeTrack.id;
               return (
@@ -190,6 +263,8 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
                   <button
                     type="button"
                     onClick={() => onSelectTrack(item)}
+                    aria-current={isCurrent ? 'true' : undefined}
+                    aria-label={`${isCurrent ? 'Now playing' : 'Play'} ${item.title} by ${item.artist}`}
                     className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
                   >
                     <Play
@@ -206,6 +281,7 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
                         {item.title}
                       </div>
                       <div className="text-[11px] text-zinc-400 truncate">
+                        {isCurrent ? 'Now playing · ' : userQueuedIds.has(item.id) ? 'Queued · ' : ''}
                         {item.artist} · {formatDurationMs(item.durationMs)}
                       </div>
                     </div>
@@ -217,7 +293,7 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
                       aria-label={`Move ${item.title} up in queue`}
                       disabled={idx === 0}
                       onClick={() => onMoveQueueItem(idx, -1)}
-                      className="p-1 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                      className="p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
                     >
                       <ArrowUp className="w-3.5 h-3.5" />
                     </button>
@@ -226,16 +302,16 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
                       aria-label={`Move ${item.title} down in queue`}
                       disabled={idx === queue.length - 1}
                       onClick={() => onMoveQueueItem(idx, 1)}
-                      className="p-1 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
+                      className="p-1.5 rounded hover:bg-white/10 text-zinc-400 hover:text-white disabled:opacity-30 cursor-pointer"
                     >
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
-                    {queue.length > 1 && (
+                    {!isCurrent && (
                       <button
                         type="button"
                         aria-label={`Remove ${item.title} from queue`}
                         onClick={() => onRemoveQueueItem(item.id)}
-                        className="p-1 rounded text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                        className="p-1.5 rounded text-rose-400 hover:bg-rose-500/10 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -261,6 +337,13 @@ export const LyricsAndQueueDrawer: React.FC<LyricsAndQueueDrawerProps> = ({
               Reset Flat
             </button>
           </div>
+
+          {activeTrack.isLiveInnerTube && (
+            <p className="text-[11px] leading-snug text-zinc-400">
+              The equalizer shapes Local Studio tracks. YouTube Music streams play through
+              YouTube&rsquo;s own player and are not affected.
+            </p>
+          )}
 
           <div className="space-y-3">
             {EQ_BAND_LABELS.map((label, idx) => (
