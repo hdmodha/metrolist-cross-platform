@@ -4,11 +4,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import {
-  buildSanitizedLyricsRequest,
+  INNERTUBE_API_ORIGIN,
+  INNERTUBE_ENDPOINT_URLS,
+  deriveLyricsSearchTerms,
+  fetchInnerTubeRadioTracks,
   isValidYouTubeVideoId,
-  parseInnerTubeSearchResponse,
-  parseInnerTubeWatchNextResponse,
+  pickBestLyricsMatch,
   sanitizeApiQueryText,
+  searchInnerTubeTracks,
+  type InnerTubeTransport,
 } from './src/utils/metrolistCore.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,6 +21,7 @@ const __dirname = path.dirname(__filename);
 const MAX_CACHE_ENTRIES = 200;
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const UPSTREAM_TIMEOUT_MS = 8000;
+const LRCLIB_ORIGIN = 'https://lrclib.net';
 
 function setBoundedCache<T>(
   cache: Map<string, { timestamp: number; payload: T }>,
@@ -30,6 +35,47 @@ function setBoundedCache<T>(
     }
   }
   cache.set(key, { timestamp: Date.now(), payload });
+}
+
+const INNERTUBE_HEADERS = {
+  'Content-Type': 'application/json',
+  Origin: INNERTUBE_API_ORIGIN,
+  Referer: `${INNERTUBE_API_ORIGIN}/`,
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+};
+
+/** Server-side InnerTube transport: fixed allow-listed endpoint URLs only (no request-derived hosts). */
+const innerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
+  const url = new URL(INNERTUBE_ENDPOINT_URLS[endpoint]);
+  if (url.origin !== INNERTUBE_API_ORIGIN) {
+    throw new Error('Invalid InnerTube upstream origin.');
+  }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: INNERTUBE_HEADERS,
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`InnerTube ${endpoint} upstream returned ${response.status}`);
+  }
+  return response.json();
+};
+
+async function fetchLrcLibSearch(params: Record<string, string>): Promise<unknown> {
+  const url = new URL(`${LRCLIB_ORIGIN}/api/search`);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  if (url.origin !== LRCLIB_ORIGIN) {
+    throw new Error('Invalid lyrics upstream origin.');
+  }
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'Metrolist-KMP/2.0 (https://github.com/metrolistgroup/metrolist)' },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  return response.ok ? response.json() : [];
 }
 
 async function startServer() {
@@ -60,27 +106,25 @@ async function startServer() {
   });
   app.use(rateLimiterMiddleware);
 
+  // The API is public, read-only and cookie-less, so any origin may call it. This is what lets the
+  // packaged Android / iOS app (`https://localhost`) and static web hosts use a deployed backend
+  // through `VITE_API_BASE_URL`.
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   // Bounded in-memory caches for <2ms response times on repeated searches, recommendations & stream resolutions
   const searchCache = new Map<string, { timestamp: number; payload: unknown }>();
   const resolveCache = new Map<string, { timestamp: number; payload: unknown }>();
   const recommendationsCache = new Map<string, { timestamp: number; payload: unknown }>();
-
-  const INNERTUBE_HEADERS = {
-    'Content-Type': 'application/json',
-    Origin: 'https://music.youtube.com',
-    Referer: 'https://music.youtube.com/',
-    'User-Agent':
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  };
-
-  const INNERTUBE_CONTEXT = {
-    client: {
-      clientName: 'WEB_REMIX',
-      clientVersion: '1.20240717.01.00',
-      hl: 'en',
-      gl: 'US',
-    },
-  };
 
   /**
    * 1. Live YouTube Music InnerTube `WEB_REMIX` Search Proxy
@@ -100,39 +144,21 @@ async function startServer() {
     }
 
     try {
-      const response = await fetch(
-        'https://music.youtube.com/youtubei/v1/search?prettyPrint=false',
-        {
-          method: 'POST',
-          headers: INNERTUBE_HEADERS,
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-          body: JSON.stringify({
-            context: INNERTUBE_CONTEXT,
-            query,
-            // Songs filter param in YouTube Music InnerTube
-            params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D',
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        res.status(502).json({ error: `InnerTube upstream returned ${response.status}` });
-        return;
-      }
-
-      const rawJson = await response.json();
-      const tracks = parseInnerTubeSearchResponse(rawJson).slice(0, 15);
+      const tracks = (await searchInnerTubeTracks(innerTubeTransport, query)).slice(0, 20);
       const payload = {
         source: 'YouTube Music InnerTube (WEB_REMIX v1)',
         query,
         count: tracks.length,
         tracks,
       };
-      setBoundedCache(searchCache, cacheKey, payload);
+      // Never cache an empty answer: it is usually transient and would hide results for 30 minutes
+      if (tracks.length > 0) {
+        setBoundedCache(searchCache, cacheKey, payload);
+      }
       res.json(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown InnerTube error';
-      res.status(500).json({ error: message });
+      res.status(502).json({ error: message });
     }
   });
 
@@ -156,26 +182,12 @@ async function startServer() {
 
       // If the track does not yet have a canonical 11-char YouTube videoId, resolve it via search
       if (!seedVideoId && (title || artist)) {
-        const searchQ = `${title} ${artist}`.trim();
-        const searchRes = await fetch(
-          'https://music.youtube.com/youtubei/v1/search?prettyPrint=false',
-          {
-            method: 'POST',
-            headers: INNERTUBE_HEADERS,
-            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-            body: JSON.stringify({
-              context: INNERTUBE_CONTEXT,
-              query: searchQ,
-              params: 'EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D',
-            }),
-          }
-        );
-        if (searchRes.ok) {
-          const searchJson = await searchRes.json();
-          const parsedSearch = parseInnerTubeSearchResponse(searchJson);
-          if (parsedSearch.length > 0) {
-            seedVideoId = parsedSearch[0].videoId;
-          }
+        const parsedSearch = await searchInnerTubeTracks(
+          innerTubeTransport,
+          `${title} ${artist}`.trim()
+        ).catch(() => []);
+        if (parsedSearch.length > 0) {
+          seedVideoId = parsedSearch[0].videoId;
         }
       }
 
@@ -184,29 +196,7 @@ async function startServer() {
       }
 
       // Query YouTube Music's official RDAMVM Radio / WatchNext recommendation engine
-      const nextRes = await fetch(
-        'https://music.youtube.com/youtubei/v1/next?prettyPrint=false',
-        {
-          method: 'POST',
-          headers: INNERTUBE_HEADERS,
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-          body: JSON.stringify({
-            context: INNERTUBE_CONTEXT,
-            videoId: seedVideoId,
-            playlistId: `RDAMVM${seedVideoId}`,
-            isAudioOnly: true,
-            enablePersistentPlaylistPanel: true,
-          }),
-        }
-      );
-
-      if (!nextRes.ok) {
-        res.status(502).json({ error: `InnerTube next returned ${nextRes.status}` });
-        return;
-      }
-
-      const nextJson = await nextRes.json();
-      const tracks = parseInnerTubeWatchNextResponse(nextJson, seedVideoId).slice(0, 12);
+      const tracks = (await fetchInnerTubeRadioTracks(innerTubeTransport, seedVideoId)).slice(0, 20);
 
       const payload = {
         source: `YouTube Music Radio (RDAMVM${seedVideoId})`,
@@ -214,21 +204,26 @@ async function startServer() {
         count: tracks.length,
         tracks,
       };
-      setBoundedCache(recommendationsCache, cacheKey, payload);
+      if (tracks.length > 0) {
+        setBoundedCache(recommendationsCache, cacheKey, payload);
+      }
       res.json(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Recommendation engine error';
-      res.status(500).json({ error: message });
+      res.status(502).json({ error: message });
     }
   });
 
   /**
-   * 3. Live Ad-Free Audio Stream & Synced Lyrics Resolver (`/api/innertube/resolve`)
+   * 3. Synced Lyrics Resolver (`/api/innertube/resolve`)
    */
   app.get('/api/innertube/resolve', async (req, res) => {
     const title = sanitizeApiQueryText(req.query.title, 120);
     const artist = sanitizeApiQueryText(req.query.artist, 120);
     const videoId = sanitizeApiQueryText(req.query.videoId, 32);
+    const requestedDurationMs = Number(sanitizeApiQueryText(req.query.durationMs, 12));
+    const durationMs =
+      Number.isFinite(requestedDurationMs) && requestedDurationMs > 0 ? requestedDurationMs : 0;
 
     if (!title) {
       res.status(400).json({ error: 'Missing track title.' });
@@ -243,76 +238,47 @@ async function startServer() {
     }
 
     try {
-      // Sanitize outbound lyrics request using hardened VULN-05 guard
-      const sanitizedLrcReq = buildSanitizedLyricsRequest(
-        'https://lrclib.net/api/search',
-        title,
-        artist,
-        undefined,
-        true
+      // YouTube titles look like "Artist - Song (Official Video)": reduce them to clean lookup terms
+      const terms = deriveLyricsSearchTerms(title, artist);
+
+      let bestMatch = pickBestLyricsMatch(
+        await fetchLrcLibSearch({ track_name: terms.trackName, artist_name: terms.artistName }),
+        durationMs
       );
-
-      const lrcUrl = new URL(sanitizedLrcReq.finalUrl);
-
-      const searchTerm = `${title} ${artist}`.trim();
-      const itunesUrl = new URL('https://itunes.apple.com/search');
-      itunesUrl.searchParams.set('term', searchTerm);
-      itunesUrl.searchParams.set('entity', 'song');
-      itunesUrl.searchParams.set('limit', '3');
-
-      if (
-        lrcUrl.origin !== 'https://lrclib.net' ||
-        itunesUrl.origin !== 'https://itunes.apple.com'
-      ) {
-        res.status(400).json({ error: 'Invalid upstream origin.' });
-        return;
+      if (!bestMatch?.syncedLyrics && terms.freeText) {
+        // Second chance: free-text search across title / artist / album
+        const freeTextMatch = pickBestLyricsMatch(
+          await fetchLrcLibSearch({ q: terms.freeText }),
+          durationMs
+        );
+        if (freeTextMatch?.syncedLyrics || !bestMatch) {
+          bestMatch = freeTextMatch;
+        }
       }
 
-      const [lrcRes, audioRes] = await Promise.allSettled([
-        fetch(lrcUrl, {
-          headers: { 'User-Agent': 'Metrolist-KMP/2.0 (https://github.com/metrolistgroup/metrolist)' },
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        }).then((r) => (r.ok ? r.json() : [])),
-        fetch(itunesUrl, {
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-        }).then((r) => (r.ok ? r.json() : { results: [] })),
-      ]);
-
-      let syncedLrc = '';
-      let plainLyrics = '';
-      if (lrcRes.status === 'fulfilled' && Array.isArray(lrcRes.value) && lrcRes.value.length > 0) {
-        const bestMatch =
-          lrcRes.value.find((item: { syncedLyrics?: string }) => !!item.syncedLyrics) ||
-          lrcRes.value[0];
-        syncedLrc = bestMatch?.syncedLyrics || '';
-        plainLyrics = bestMatch?.plainLyrics || '';
-      }
-
-      let directAudioUrl = '';
-      if (
-        audioRes.status === 'fulfilled' &&
-        audioRes.value &&
-        Array.isArray(audioRes.value.results) &&
-        audioRes.value.results.length > 0
-      ) {
-        directAudioUrl = audioRes.value.results[0].previewUrl || '';
-      }
-
+      const syncedLrc = bestMatch?.syncedLyrics || '';
       const payload = {
         videoId,
         title,
         artist,
-        directAudioUrl,
+        directAudioUrl: '',
         syncedLrc,
-        plainLyrics,
+        plainLyrics: bestMatch?.plainLyrics || '',
         lyricsProvider: syncedLrc ? 'LRCLIB (Live Synced)' : 'InnerTube Generated',
       };
-      setBoundedCache(resolveCache, cacheKey, payload);
+      if (syncedLrc) {
+        setBoundedCache(resolveCache, cacheKey, payload);
+      }
       res.json(payload);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Stream resolution error';
-      res.status(500).json({ error: message });
+      const message = err instanceof Error ? err.message : 'Lyrics resolution error';
+      res.status(502).json({ error: message });
     }
+  });
+
+  // Unknown API routes must answer with JSON, never with the SPA shell
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Unknown API route.' });
   });
 
   if (process.env.NODE_ENV !== 'production') {
@@ -331,7 +297,13 @@ async function startServer() {
   } else {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
-    app.get('*', rateLimiterMiddleware, (_req, res) => {
+    // SPA fallback. A path-less middleware (instead of `app.get('*')`) keeps this working on both
+    // Express 4 and Express 5, where a bare `*` route pattern throws at startup.
+    app.use(rateLimiterMiddleware, (req, res, next) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        next();
+        return;
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
