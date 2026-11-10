@@ -73,6 +73,7 @@ jobs:
       - name: Install dependencies & build frontend
         shell: bash
         run: |
+          rm -f package-lock.json
           npm install --legacy-peer-deps
           npm run build
 
@@ -102,27 +103,30 @@ jobs:
           node-version: 22
 
       - name: Setup Java 21 for Android Gradle
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "21"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install dependencies & build web assets
         run: |
+          rm -f package-lock.json
           npm install --legacy-peer-deps
           npm run build
 
       - name: Generate Android & iOS Native Capacitor Projects & Build APK
         run: |
           npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/ios@6
-          npx cap add android || true
-          npx cap add ios || true
-          npx cap sync || true
+          npx cap add android
+          npx cap add ios
+          npx cap sync
           mkdir -p release-mobile
           if [ -d "android" ]; then
+            if [ -n "$ANDROID_HOME" ]; then
+              echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+            elif [ -d "/usr/local/lib/android/sdk" ]; then
+              echo "sdk.dir=/usr/local/lib/android/sdk" > android/local.properties
+            fi
             chmod +x android/gradlew
             (cd android && ./gradlew assembleDebug --no-daemon)
             cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
@@ -131,12 +135,6 @@ jobs:
           if [ -d "ios" ]; then
             7z a -tzip release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json
           fi
-
-      - name: Upload Standalone Android APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: metrolist-android-apk
-          path: release-mobile/metrolist-android-universal.apk
 
       - name: Upload Mobile Native Artifacts (Android APK + iOS Xcode Bundle)
         uses: actions/upload-artifact@v4
