@@ -50,22 +50,23 @@ test.describe('packaged app without a backend', () => {
     });
 
     await app.open();
-    await expect(app.featured.locator('h2')).toHaveText('Daft Punk Essentials');
+    const popular = app.main.locator('section', { has: page.getByRole('heading', { name: 'Popular right now' }) });
+    await expect(app.songButtons(popular).first()).toContainText('Top Hits');
     await app.search('arijit singh');
-    await expect(app.resultCards()).toHaveCount(12);
-    await expect(app.resultCards().first()).toContainText('Arijit Singh');
+    await expect(app.resultRows()).toHaveCount(12);
+    await expect(app.resultRows().first()).toContainText('Arijit Singh');
     expect(calls.some((c) => c.method === 'POST' && c.url === 'https://music.youtube.com/youtubei/v1/search?prettyPrint=false')).toBe(true);
 
-    await app.resultCards().first().click();
+    await app.resultRows().first().click();
     await expect.poll(() => app.ytState()).toBe(1);
     await app.openQueue();
     await expect.poll(async () => (await app.upcomingTitles()).length).toBe(10);
     expect(calls.some((c) => c.url.includes('/youtubei/v1/next') && !c.data.continuation)).toBe(true);
 
     // Jump near the end of the radio: the next page is fetched with its continuation token
-    await app.drawer.locator('[aria-label^="Play "]').nth(6).click();
+    await app.queue.locator('ul[aria-label="Next up"] button[aria-label^="Play "]').nth(6).click();
     await expect.poll(() => calls.filter((c) => c.url.includes('/youtubei/v1/next') && !!c.data.continuation).length).toBeGreaterThan(0);
-    await expect.poll(async () => (await app.queueTitles()).filter((t) => / P2-/.test(t)).length).toBeGreaterThan(0);
+    await expect.poll(async () => (await app.upcomingTitles()).filter((t) => / P2-/.test(t)).length).toBeGreaterThan(0);
 
     expect(apiCalls, 'no request is wasted on a backend that is not there').toEqual([]);
   });

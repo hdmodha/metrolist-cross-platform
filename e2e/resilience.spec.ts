@@ -10,28 +10,24 @@ test.describe('resilience', () => {
     await app.ytDo('reloadSameVideo', original); // YouTube now refuses this upload (error 150)
     await expect.poll(async () => (await app.yt())?.videoId).not.toBe(original);
     await expect.poll(() => app.ytState()).toBe(1);
-    await expect(app.heroTitle).toHaveText(song);
+    await expect(app.currentTitle).toHaveText(song);
   });
 
   test('songs that cannot be played are skipped, and three failures in a row stop playback', async ({ app }) => {
     await app.open({ yt: { errorIds: ['*'] } });
-    const first = (await (async () => {
-      await app.search('broken uploads');
-      const card = app.resultCards().first();
-      const title = await card.locator('.font-semibold').textContent();
-      await card.click();
-      return title ?? '';
-    })());
+    await app.search('broken uploads');
+    const first = await app.titleOf(app.resultRows().first());
+    await app.resultRows().first().click();
     await expect(app.notice).toContainText('Several songs in a row could not be played', { timeout: 20_000 });
     await expect(app.playButton).toBeVisible();
-    await expect(app.heroTitle).not.toHaveText(first);
+    await expect(app.currentTitle).not.toHaveText(first);
   });
 
   test('YouTube unreachable: the app waits and retries, then resumes on its own when it is back', async ({ app, page }) => {
     await page.route(YOUTUBE_API, (route) => route.abort());
     await app.open();
     await app.search('kavinsky nightcall');
-    await app.resultCards().first().click();
+    await app.resultRows().first().click();
     await expect(app.waitingBanner).toBeVisible();
     await expect(app.pauseButton, 'the play intent is kept').toBeVisible();
     expect(await app.yt()).toBeNull();
@@ -51,7 +47,7 @@ test.describe('resilience', () => {
     await page.clock.install();
     await app.open();
     await app.search('kavinsky nightcall');
-    await app.resultCards().first().click();
+    await app.resultRows().first().click();
     await expect(app.waitingBanner).toBeVisible();
     // Back-off 3 s, 6 s, 12 s, 24 s, 30 s, then give up
     for (let i = 0; i < 8 && !(await app.playButton.isVisible()); i++) {
