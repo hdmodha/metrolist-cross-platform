@@ -6,7 +6,7 @@
  * The playback model follows the ideas of the Android app Metrolist (paged radio queue that loads
  * more when it runs low, "play next" vs "add to queue", resumable queue, retry with back-off).
  */
-import type { MetrolistTrack } from '../data/metrolistData';
+import type { MetrolistTrack } from '../data/track';
 import {
   isValidYouTubeVideoId,
   sanitizeRadioContinuation,
@@ -25,6 +25,8 @@ import { canRetryNetwork, computeRetryDelayMs } from './retryPolicy';
 /* ------------------------------------------- limits ------------------------------------------ */
 
 export const MAX_PLAY_HISTORY = 50;
+/** Songs kept in "Recently played" (newest first). */
+export const MAX_RECENTLY_PLAYED = 30;
 /** Uploads tried for one song (its own video included) before it counts as unplayable. */
 export const MAX_VIDEO_CANDIDATES_PER_TRACK = 3;
 export const MAX_CONSECUTIVE_STREAM_FAILURES = 3;
@@ -58,18 +60,27 @@ export interface RadioSession {
   failedAttempts: number;
 }
 
+/** Where the listener started the current listening session ("Playing from …"). */
+export type PlaySource = 'home' | 'search' | 'liked' | 'downloads' | 'library' | 'radio';
+
 export interface PlayerState {
+  /** Every song some list below refers to (anything else is garbage-collected). */
   tracksById: Record<string, MetrolistTrack>;
-  /** "Your Library": most recently added first; seed tracks last. */
-  libraryIds: string[];
-  /** Play order. Invariant: contains `activeTrackId` once playback has started. */
+  /** Liked Songs, newest first. */
+  likedIds: string[];
+  /** Downloads, newest first (a list only: the audio itself is not stored on the device). */
+  downloadedIds: string[];
+  /** Recently played, newest first, deduplicated, at most `MAX_RECENTLY_PLAYED`. */
+  recentlyPlayedIds: string[];
+  /** Play order. Invariant: contains `activeTrackId`; empty exactly when nothing is active. */
   queueIds: string[];
   /** Hand-queued upcoming tracks (they play before automatic radio picks). Always upcoming. */
   userQueuedIds: string[];
-  activeTrackId: string;
+  /** The loaded song, or `null` on a fresh install. */
+  activeTrackId: string | null;
+  playingFrom: PlaySource | null;
   /** The listener's intent. */
   isPlaying: boolean;
-  hasStartedPlayback: boolean;
   streamStatus: StreamStatus;
   /** `token` changes on every request, so seeking to the same position still re-triggers. */
   seekRequest: { token: number; ms: number } | null;
@@ -97,9 +108,11 @@ export type TrackInput = MetrolistTrack | InnerTubeParsedTrack;
 
 export type PlayerAction =
   /** Search result or recommendation card: play now, keep history + hand-queued songs. */
-  | { type: 'playFromSearch'; track: InnerTubeParsedTrack }
-  /** Library row: play now, then continue through `context` (the list it was picked from). */
-  | { type: 'playFromList'; track: MetrolistTrack; context: MetrolistTrack[] }
+  | { type: 'playFromSearch'; track: TrackInput; source?: PlaySource }
+  /** List row: play now, then continue through `context` (the list it was picked from). */
+  | { type: 'playFromList'; track: TrackInput; context: TrackInput[]; source?: PlaySource }
+  /** Shuffle button of a list: shuffle on, start at a random song (`random` in [0, 1)), queue the rest. */
+  | { type: 'shuffleList'; context: TrackInput[]; random: number; source?: PlaySource }
   /** Jump to a song inside the queue without reshaping it. */
   | { type: 'playQueueItem'; trackId: string }
   | { type: 'togglePlay' }
@@ -133,7 +146,7 @@ export type PlayerAction =
       trackId: string;
       tracks: InnerTubeParsedTrack[];
       continuation: string | null;
-      /** Video the radio was built from (the server may resolve one for seed tracks). */
+      /** Video the radio was built from (the server may resolve one from the title). */
       seedVideoId?: string;
     }
   | { type: 'recommendationsFailed'; trackId: string; fallback: InnerTubeParsedTrack[] }
@@ -160,7 +173,7 @@ export type PlayerAction =
 
 const hasOwn = (record: object, key: string) => Object.prototype.hasOwnProperty.call(record, key);
 
-function getTrack(state: Pick<PlayerState, 'tracksById'>, id: string): MetrolistTrack | undefined {
+function getTrack(state: Pick<PlayerState, 'tracksById'>, id: string | null | undefined): MetrolistTrack | undefined {
   return id && hasOwn(state.tracksById, id) ? state.tracksById[id] : undefined;
 }
 
@@ -175,17 +188,10 @@ export function toMetrolistTrack(ytTrack: InnerTubeParsedTrack): MetrolistTrack 
     videoId: ytTrack.videoId,
     title: ytTrack.title,
     artist: ytTrack.artist,
-    album: ytTrack.album || 'YouTube Music',
+    album: ytTrack.album || '',
     durationMs:
       ytTrack.durationMs > PREVIEW_DURATION_MS ? ytTrack.durationMs : DEFAULT_LIVE_TRACK_DURATION_MS,
-    bpm: 116,
-    rootFreqHz: 220,
-    chordIntervals: [0, 3, 7, 10],
     coverUrl: ytTrack.thumbnailUrl || `https://i.ytimg.com/vi/${ytTrack.videoId}/hqdefault.jpg`,
-    genre: 'YouTube Music',
-    liked: false,
-    cachedOffline: false,
-    isLiveInnerTube: true,
   };
 }
 
@@ -193,7 +199,7 @@ function isMetrolistTrack(input: TrackInput): input is MetrolistTrack {
   return typeof (input as Partial<MetrolistTrack>).id === 'string';
 }
 
-/** The stored track for an input when the player already knows it (keeps likes and real durations). */
+/** The stored track for an input when the player already knows it (keeps real durations and uploads). */
 function resolveTrack(state: PlayerState, input: TrackInput): MetrolistTrack {
   const id = isMetrolistTrack(input) ? input.id : liveTrackId(input.videoId);
   return getTrack(state, id) ?? (isMetrolistTrack(input) ? input : toMetrolistTrack(input));
@@ -213,15 +219,21 @@ function patchTrack(state: PlayerState, id: string, patch: Partial<MetrolistTrac
   return { ...state, tracksById: { ...state.tracksById, [id]: { ...track, ...patch } } };
 }
 
-function addToLibraryFront(libraryIds: string[], id: string): string[] {
-  return libraryIds.includes(id) ? libraryIds : [id, ...libraryIds];
+/** `id` first, then the rest of `ids` without it (the same array when it is already first). */
+function moveToFront(ids: string[], id: string): string[] {
+  return ids[0] === id ? ids : [id, ...ids.filter((other) => other !== id)];
+}
+
+function recordPlayed(recentlyPlayedIds: string[], id: string): string[] {
+  const next = moveToFront(recentlyPlayedIds, id);
+  return next.length > MAX_RECENTLY_PLAYED ? next.slice(0, MAX_RECENTLY_PLAYED) : next;
 }
 
 const toRefs = (ids: string[]) => ids.map((id) => ({ id }));
 const fromRefs = (refs: Array<{ id: string }>) => refs.map((ref) => ref.id);
 
 function upcomingIdsOf(state: PlayerState): string[] {
-  const idx = state.queueIds.indexOf(state.activeTrackId);
+  const idx = state.activeTrackId === null ? -1 : state.queueIds.indexOf(state.activeTrackId);
   return idx === -1 ? state.queueIds : state.queueIds.slice(idx + 1);
 }
 
@@ -262,7 +274,7 @@ function startTrack(
   const sameTrack = previousId === trackId;
 
   let playHistory = state.playHistory;
-  if (options.recordHistory && state.hasStartedPlayback && previousId && !sameTrack) {
+  if (options.recordHistory && previousId && !sameTrack) {
     playHistory = [...playHistory, previousId].slice(-MAX_PLAY_HISTORY);
   }
   // A new song gives a radio that gave up a fresh chance
@@ -275,12 +287,11 @@ function startTrack(
     ...state,
     activeTrackId: trackId,
     playHistory,
-    hasStartedPlayback: true,
     isPlaying: true,
     queueIds: state.queueIds.includes(trackId) ? state.queueIds : [trackId, ...state.queueIds],
-    libraryIds: addToLibraryFront(state.libraryIds, trackId),
+    recentlyPlayedIds: recordPlayed(state.recentlyPlayedIds, trackId),
     userQueuedIds: state.userQueuedIds.filter((id) => id !== trackId),
-    streamStatus: track.isLiveInnerTube ? 'loading' : 'paused',
+    streamStatus: 'loading',
     // A different video always loads from 0 by itself; only a replay needs an explicit seek
     seekRequest: null,
     consecutiveStreamFailures: options.userInitiated ? 0 : state.consecutiveStreamFailures,
@@ -290,7 +301,7 @@ function startTrack(
 }
 
 function restartCurrent(state: PlayerState): PlayerState {
-  return withSeek({ ...state, isPlaying: true, hasStartedPlayback: true }, 0);
+  return withSeek({ ...state, isPlaying: true }, 0);
 }
 
 function stopPlayback(state: PlayerState): PlayerState {
@@ -298,10 +309,11 @@ function stopPlayback(state: PlayerState): PlayerState {
 }
 
 function togglePlay(state: PlayerState): PlayerState {
-  if (!getTrack(state, state.activeTrackId)) return state;
+  const activeId = state.activeTrackId;
+  if (activeId === null || !getTrack(state, activeId)) return state;
   return state.isPlaying
     ? { ...state, isPlaying: false }
-    : { ...state, isPlaying: true, hasStartedPlayback: true };
+    : { ...state, isPlaying: true, recentlyPlayedIds: recordPlayed(state.recentlyPlayedIds, activeId) };
 }
 
 /**
@@ -317,7 +329,7 @@ function skip(
   random: number
 ): PlayerState {
   const currentId = state.activeTrackId;
-  if (!getTrack(state, currentId)) return state;
+  if (currentId === null || !getTrack(state, currentId)) return state;
   const startOptions = { recordHistory: true, userInitiated: reason === 'user' };
 
   // Hand-queued songs play first, even with shuffle on
@@ -346,7 +358,7 @@ function skip(
 
 function previous(state: PlayerState, positionMs: number): PlayerState {
   const currentId = state.activeTrackId;
-  if (!getTrack(state, currentId)) return state;
+  if (currentId === null || !getTrack(state, currentId)) return state;
   // Like every music player: Previous restarts the song unless it has only just begun
   if (Number.isFinite(positionMs) && positionMs > PREVIOUS_RESTARTS_AFTER_MS) {
     return restartCurrent(state);
@@ -371,21 +383,65 @@ function previous(state: PlayerState, positionMs: number): PlayerState {
   return skip({ ...state, playHistory: [] }, -1, 'user', 0);
 }
 
-function playNow(state: PlayerState, track: MetrolistTrack, followUps: MetrolistTrack[]): PlayerState {
-  if (track.id === state.activeTrackId && getTrack(state, track.id)) return togglePlay(state);
+/** Plays `track` now; `followUps` (the rest of the list it was picked from) come after it. */
+function startFromList(
+  state: PlayerState,
+  track: MetrolistTrack,
+  followUps: MetrolistTrack[],
+  source: PlaySource | undefined
+): PlayerState {
   const withAll = withTracks(state, [track, ...followUps]);
-  const currentId = withAll.hasStartedPlayback ? withAll.activeTrackId : null;
   const queueIds = fromRefs(
     buildPlayNowQueue(
       toRefs(withAll.queueIds),
-      currentId,
+      withAll.activeTrackId,
       { id: track.id },
       new Set(withAll.userQueuedIds),
       toRefs(followUps.map((t) => t.id))
     )
   );
   // A new listening context: the previous radio session must not keep appending its pages
-  return startTrack({ ...withAll, queueIds, radio: null }, track.id, { recordHistory: true, userInitiated: true });
+  return startTrack({ ...withAll, queueIds, radio: null, playingFrom: source ?? null }, track.id, {
+    recordHistory: true,
+    userInitiated: true,
+  });
+}
+
+function playNow(
+  state: PlayerState,
+  track: MetrolistTrack,
+  followUps: MetrolistTrack[],
+  source: PlaySource | undefined
+): PlayerState {
+  // Tapping the song that is already loaded toggles it instead of restarting it
+  if (track.id === state.activeTrackId && getTrack(state, track.id)) return togglePlay(state);
+  return startFromList(state, track, followUps, source);
+}
+
+/** The tracks of a list, resolved and deduplicated, in order. */
+function resolveList(state: PlayerState, inputs: TrackInput[]): MetrolistTrack[] {
+  const seen = new Set<string>();
+  const out: MetrolistTrack[] = [];
+  for (const input of inputs) {
+    const track = resolveTrack(state, input);
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    out.push(track);
+  }
+  return out;
+}
+
+function shuffleList(
+  state: PlayerState,
+  context: TrackInput[],
+  random: number,
+  source: PlaySource | undefined
+): PlayerState {
+  const tracks = resolveList(state, context);
+  if (tracks.length === 0) return state;
+  const start = tracks[Math.floor(clampRandom(random) * tracks.length)];
+  const followUps = tracks.filter((t) => t.id !== start.id);
+  return startFromList({ ...state, shuffleEnabled: true }, start, followUps, source);
 }
 
 function trackUnplayable(state: PlayerState, trackId: string, random: number): PlayerState {
@@ -430,16 +486,16 @@ function queueTrack(state: PlayerState, input: TrackInput, mode: 'end' | 'next')
     return withNotice(state, 'This song is already playing');
   }
   const withTrack = withTracks(state, [track]);
-  const libraryIds = addToLibraryFront(withTrack.libraryIds, track.id);
+  const currentId = withTrack.activeTrackId;
 
-  if (!getTrack(withTrack, withTrack.activeTrackId)) {
+  if (currentId === null || !getTrack(withTrack, currentId)) {
     // Empty player: the song becomes the (paused) current one
     return withNotice(
       {
         ...withTrack,
-        libraryIds,
         activeTrackId: track.id,
         queueIds: [track.id, ...withTrack.queueIds.filter((id) => id !== track.id)],
+        isPlaying: false,
         streamStatus: 'paused',
       },
       `Added “${track.title}” to your queue`
@@ -449,12 +505,12 @@ function queueTrack(state: PlayerState, input: TrackInput, mode: 'end' | 'next')
   const refs = toRefs(withTrack.queueIds);
   const queueIds = fromRefs(
     mode === 'next'
-      ? insertIntoQueueAsNext(refs, withTrack.activeTrackId, { id: track.id })
-      : insertIntoQueueAfterCurrent(refs, withTrack.activeTrackId, { id: track.id }, new Set(withTrack.userQueuedIds))
+      ? insertIntoQueueAsNext(refs, currentId, { id: track.id })
+      : insertIntoQueueAfterCurrent(refs, currentId, { id: track.id }, new Set(withTrack.userQueuedIds))
   );
   const userQueuedIds = [...withTrack.userQueuedIds.filter((id) => id !== track.id), track.id];
   return withNotice(
-    { ...withTrack, libraryIds, queueIds, userQueuedIds },
+    { ...withTrack, queueIds, userQueuedIds },
     mode === 'next' ? `“${track.title}” will play next` : `Added “${track.title}” to your queue`
   );
 }
@@ -470,6 +526,7 @@ function moveQueueItem(state: PlayerState, trackId: string, direction: -1 | 1): 
 }
 
 function clearUpcoming(state: PlayerState): PlayerState {
+  if (state.activeTrackId === null) return state;
   const idx = state.queueIds.indexOf(state.activeTrackId);
   if (idx === -1) return state;
   if (idx === state.queueIds.length - 1 && state.userQueuedIds.length === 0 && state.radio === null) {
@@ -478,21 +535,24 @@ function clearUpcoming(state: PlayerState): PlayerState {
   return { ...state, queueIds: state.queueIds.slice(0, idx + 1), userQueuedIds: [], radio: null };
 }
 
-function toggleFlag(
+const COLLECTION_NAMES = { likedIds: 'Liked Songs', downloadedIds: 'Downloads' } as const;
+
+/** Adds a song to the front of Liked Songs / Downloads, or removes it when it is already there. */
+function toggleMembership(
   state: PlayerState,
   trackId: string,
-  flag: 'liked' | 'cachedOffline',
+  list: 'likedIds' | 'downloadedIds',
   input: TrackInput | undefined
 ): PlayerState {
   // A card the player has not seen yet is added first (its id must match the request)
   const candidate = !getTrack(state, trackId) && input ? resolveTrack(state, input) : undefined;
   if (candidate && candidate.id !== trackId) return state;
   const withTrack = candidate ? withTracks(state, [candidate]) : state;
-  const track = getTrack(withTrack, trackId);
-  if (!track) return state;
-  // A liked / downloaded song must live in the library even if it was only ever in the queue
-  const patched = patchTrack(withTrack, trackId, { [flag]: !track[flag] });
-  return { ...patched, libraryIds: addToLibraryFront(patched.libraryIds, trackId) };
+  if (!getTrack(withTrack, trackId)) return state;
+  const isMember = withTrack[list].includes(trackId);
+  const ids = isMember ? withTrack[list].filter((id) => id !== trackId) : [trackId, ...withTrack[list]];
+  const name = COLLECTION_NAMES[list];
+  return withNotice({ ...withTrack, [list]: ids }, isMember ? `Removed from ${name}` : `Added to ${name}`);
 }
 
 /** Appends radio picks (deduplicated) when the queue is short, trimming old history. */
@@ -501,10 +561,11 @@ function appendRadioTracks(
   tracks: InnerTubeParsedTrack[],
   options: { minUpcoming: number; maxAppend: number }
 ): PlayerState {
+  if (state.activeTrackId === null) return state;
   const resolved = tracks.map((t) => resolveTrack(state, t));
   const withAll = withTracks(state, resolved);
   const queueIds = fromRefs(
-    mergeRadioIntoQueue(toRefs(withAll.queueIds), withAll.activeTrackId, toRefs(resolved.map((t) => t.id)), {
+    mergeRadioIntoQueue(toRefs(withAll.queueIds), state.activeTrackId, toRefs(resolved.map((t) => t.id)), {
       ...options,
       maxHistory: RADIO_MAX_KEPT_HISTORY,
     })
@@ -597,14 +658,15 @@ function restore(state: PlayerState, snapshot: PlayerState, positionMs: number):
 function reduce(state: PlayerState, action: PlayerAction): PlayerState {
   switch (action.type) {
     case 'playFromSearch':
-      return playNow(state, resolveTrack(state, action.track), []);
+      return playNow(state, resolveTrack(state, action.track), [], action.source);
     case 'playFromList': {
       const track = resolveTrack(state, action.track);
-      const contextIdx = action.context.findIndex((t) => t.id === track.id);
-      const followUps =
-        contextIdx >= 0 ? action.context.slice(contextIdx + 1).map((t) => resolveTrack(state, t)) : [];
-      return playNow(state, track, followUps);
+      const context = resolveList(state, action.context);
+      const contextIdx = context.findIndex((t) => t.id === track.id);
+      return playNow(state, track, contextIdx >= 0 ? context.slice(contextIdx + 1) : [], action.source);
     }
+    case 'shuffleList':
+      return shuffleList(state, action.context, action.random, action.source);
     case 'playQueueItem':
       if (!state.queueIds.includes(action.trackId) || !getTrack(state, action.trackId)) return state;
       if (action.trackId === state.activeTrackId) return togglePlay(state);
@@ -626,6 +688,7 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
     case 'alternateVideoFound':
       return alternateVideoFound(state, action.trackId, action.videoId, action.durationMs);
     case 'streamStatusChanged': {
+      if (state.activeTrackId === null) return state;
       if (action.status !== 'playing') {
         return action.status === state.streamStatus ? state : { ...state, streamStatus: action.status };
       }
@@ -678,9 +741,9 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
     case 'clearUpcoming':
       return clearUpcoming(state);
     case 'toggleLike':
-      return toggleFlag(state, action.trackId, 'liked', action.track);
+      return toggleMembership(state, action.trackId, 'likedIds', action.track);
     case 'toggleDownloaded':
-      return toggleFlag(state, action.trackId, 'cachedOffline', action.track);
+      return toggleMembership(state, action.trackId, 'downloadedIds', action.track);
     case 'toggleShuffle':
       return { ...state, shuffleEnabled: !state.shuffleEnabled };
     case 'cycleRepeat':
@@ -713,7 +776,7 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
       if (!state.radio || !selectCanRetryRadio(state)) return state;
       return { ...state, radio: { ...state.radio, status: 'idle' } };
     case 'networkLost':
-      if (state.network.waiting) return state;
+      if (state.network.waiting || state.activeTrackId === null) return state;
       return { ...state, network: { waiting: true, retryAttempt: 0 } };
     case 'networkRetryAttempted':
       if (!state.network.waiting) return state;
@@ -741,10 +804,12 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
-function uniqueKnown(state: PlayerState, ids: string[]): string[] {
+/** `ids` without duplicates or unknown ids, at most `limit` long (the same array when nothing changes). */
+function uniqueKnown(state: PlayerState, ids: string[], limit = Number.POSITIVE_INFINITY): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const id of ids) {
+    if (out.length >= limit) break;
     if (!seen.has(id) && getTrack(state, id)) {
       seen.add(id);
       out.push(id);
@@ -753,22 +818,30 @@ function uniqueKnown(state: PlayerState, ids: string[]): string[] {
   return sameList(out, ids) ? ids : out;
 }
 
+function pickRecords<T>(record: Record<string, T>, keep: ReadonlySet<string>): Record<string, T> {
+  const keys = Object.keys(record);
+  if (keys.every((key) => keep.has(key))) return record;
+  const out: Record<string, T> = {};
+  for (const key of keys) if (keep.has(key)) out[key] = record[key];
+  return out;
+}
+
 /**
  * Re-establishes every invariant after a change: no duplicates or unknown ids, the active song in
- * the queue once playback started, hand-queued marks only on upcoming songs, the shelf without the
- * active song, and no track objects that nothing references any more.
+ * the queue (an empty queue exactly when nothing is active), hand-queued marks only on upcoming
+ * songs, the shelf without the active song, and no track objects that nothing references any more.
  */
 function finalize(state: PlayerState): PlayerState {
   let queueIds = uniqueKnown(state, state.queueIds);
-  const libraryIds = uniqueKnown(state, state.libraryIds);
-  let activeTrackId = state.activeTrackId;
-  if (!getTrack(state, activeTrackId)) activeTrackId = queueIds[0] ?? libraryIds[0] ?? '';
-  if (state.hasStartedPlayback && activeTrackId && !queueIds.includes(activeTrackId)) {
-    queueIds = [activeTrackId, ...queueIds];
-  }
+  const likedIds = uniqueKnown(state, state.likedIds);
+  const downloadedIds = uniqueKnown(state, state.downloadedIds);
+  const recentlyPlayedIds = uniqueKnown(state, state.recentlyPlayedIds, MAX_RECENTLY_PLAYED);
+  let activeTrackId = getTrack(state, state.activeTrackId) ? state.activeTrackId : null;
+  if (activeTrackId === null) activeTrackId = queueIds[0] ?? null;
+  if (activeTrackId !== null && !queueIds.includes(activeTrackId)) queueIds = [activeTrackId, ...queueIds];
 
-  const activeIdx = queueIds.indexOf(activeTrackId);
-  const upcoming = new Set(activeIdx === -1 ? queueIds : queueIds.slice(activeIdx + 1));
+  const activeIdx = activeTrackId === null ? -1 : queueIds.indexOf(activeTrackId);
+  const upcoming = new Set(queueIds.slice(activeIdx + 1));
   const queuedFiltered = [...new Set(state.userQueuedIds)].filter((id) => upcoming.has(id));
   const userQueuedIds = sameList(queuedFiltered, state.userQueuedIds) ? state.userQueuedIds : queuedFiltered;
 
@@ -781,30 +854,26 @@ function finalize(state: PlayerState): PlayerState {
       ? state.recommendations.filter((r) => !isActiveRecommendation(active, r))
       : state.recommendations;
 
-  const referenced = new Set([...queueIds, ...libraryIds, ...playHistory, activeTrackId]);
-  let tracksById = state.tracksById;
-  let triedVideoIdsByTrack = state.triedVideoIdsByTrack;
-  const storedIds = Object.keys(tracksById);
-  if (storedIds.some((id) => !referenced.has(id))) {
-    tracksById = {};
-    for (const id of storedIds) if (referenced.has(id)) tracksById[id] = state.tracksById[id];
-  }
-  const triedIds = Object.keys(triedVideoIdsByTrack);
-  if (triedIds.some((id) => !referenced.has(id))) {
-    triedVideoIdsByTrack = {};
-    for (const id of triedIds) if (referenced.has(id)) triedVideoIdsByTrack[id] = state.triedVideoIdsByTrack[id];
-  }
+  const referenced = new Set([...queueIds, ...likedIds, ...downloadedIds, ...recentlyPlayedIds, ...playHistory]);
+  const nothingLoaded = activeTrackId === null;
 
   return {
     ...state,
-    tracksById,
-    triedVideoIdsByTrack,
+    tracksById: pickRecords(state.tracksById, referenced),
+    triedVideoIdsByTrack: pickRecords(state.triedVideoIdsByTrack, referenced),
     queueIds,
-    libraryIds,
+    likedIds,
+    downloadedIds,
+    recentlyPlayedIds,
     activeTrackId,
     userQueuedIds,
     playHistory,
     recommendations,
+    // Nothing loaded: nothing can play, seek or wait for the network
+    isPlaying: nothingLoaded ? false : state.isPlaying,
+    seekRequest: nothingLoaded ? null : state.seekRequest,
+    playingFrom: nothingLoaded ? null : state.playingFrom,
+    network: nothingLoaded && state.network.waiting ? { waiting: false, retryAttempt: 0 } : state.network,
   };
 }
 
@@ -815,24 +884,18 @@ export function playerReducer(state: PlayerState, action: PlayerAction): PlayerS
 }
 
 export function createInitialPlayerState(
-  seedTracks: MetrolistTrack[],
   preferences: Partial<Pick<PlayerState, 'shuffleEnabled' | 'repeatMode' | 'autoplayRadio'>> = {}
 ): PlayerState {
-  const tracksById: Record<string, MetrolistTrack> = {};
-  const ids: string[] = [];
-  for (const track of seedTracks) {
-    if (hasOwn(tracksById, track.id)) continue;
-    tracksById[track.id] = track;
-    ids.push(track.id);
-  }
   return {
-    tracksById,
-    libraryIds: ids,
-    queueIds: [...ids],
+    tracksById: {},
+    likedIds: [],
+    downloadedIds: [],
+    recentlyPlayedIds: [],
+    queueIds: [],
     userQueuedIds: [],
-    activeTrackId: ids[0] ?? '',
+    activeTrackId: null,
+    playingFrom: null,
     isPlaying: false,
-    hasStartedPlayback: false,
     streamStatus: 'paused',
     seekRequest: null,
     shuffleEnabled: preferences.shuffleEnabled ?? false,
@@ -851,25 +914,43 @@ export function createInitialPlayerState(
 
 /* ------------------------------------------ selectors ---------------------------------------- */
 
-export function selectActiveTrack(state: PlayerState): MetrolistTrack | null {
+export function selectActiveTrack(state: Pick<PlayerState, 'tracksById' | 'activeTrackId'>): MetrolistTrack | null {
   return getTrack(state, state.activeTrackId) ?? null;
 }
 
+/** The known tracks of an id list, in order. */
+export function selectTracks(tracksById: Record<string, MetrolistTrack>, ids: readonly string[]): MetrolistTrack[] {
+  const out: MetrolistTrack[] = [];
+  for (const id of ids) {
+    const track = getTrack({ tracksById }, id);
+    if (track) out.push(track);
+  }
+  return out;
+}
+
 export function selectQueueTracks(state: Pick<PlayerState, 'tracksById' | 'queueIds'>): MetrolistTrack[] {
-  return state.queueIds.map((id) => getTrack(state, id)).filter((t): t is MetrolistTrack => !!t);
+  return selectTracks(state.tracksById, state.queueIds);
 }
 
-export function selectLibraryTracks(state: Pick<PlayerState, 'tracksById' | 'libraryIds'>): MetrolistTrack[] {
-  return state.libraryIds.map((id) => getTrack(state, id)).filter((t): t is MetrolistTrack => !!t);
+export function selectLikedTracks(state: Pick<PlayerState, 'tracksById' | 'likedIds'>): MetrolistTrack[] {
+  return selectTracks(state.tracksById, state.likedIds);
 }
 
-/** A live song the listener wants to hear is still loading, buffering or waiting for the network. */
+export function selectDownloadedTracks(state: Pick<PlayerState, 'tracksById' | 'downloadedIds'>): MetrolistTrack[] {
+  return selectTracks(state.tracksById, state.downloadedIds);
+}
+
+export function selectRecentlyPlayedTracks(
+  state: Pick<PlayerState, 'tracksById' | 'recentlyPlayedIds'>
+): MetrolistTrack[] {
+  return selectTracks(state.tracksById, state.recentlyPlayedIds);
+}
+
+/** A song the listener wants to hear is still loading, buffering or waiting for the network. */
 export function selectIsStreamLoading(state: PlayerState): boolean {
-  const active = getTrack(state, state.activeTrackId);
-  if (!active?.isLiveInnerTube || !state.isPlaying) return false;
+  if (!getTrack(state, state.activeTrackId) || !state.isPlaying) return false;
   return state.network.waiting || state.streamStatus === 'loading' || state.streamStatus === 'buffering';
 }
-
 /** Ids queued after the active song (the whole queue while the active song is not in it). */
 export function selectUpcomingIds(state: PlayerState): string[] {
   return upcomingIdsOf(state);

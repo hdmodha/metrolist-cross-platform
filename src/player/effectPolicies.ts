@@ -1,7 +1,7 @@
 /**
  * Pure decisions behind the player's side effects (`usePlayer.ts`), kept here so they are unit-tested:
- * how to recover from a stream error, when to save the position, which keys are shortcuts and how
- * the Back button interacts with the search.
+ * how to recover from a stream error, when to wait for the network, when to save the position and
+ * which keys are shortcuts.
  */
 import { deriveSongSearchTerms, type InnerTubeParsedTrack } from '../utils/metrolistCore';
 import {
@@ -47,27 +47,24 @@ export function pickAlternateUpload(
   return candidates.find((c) => !tried.includes(c.videoId)) ?? null;
 }
 
-/** How long a live stream may sit in loading / buffering while offline before we wait for the network. */
+/** How long a stream may sit in loading / buffering while offline before we wait for the network. */
 export const STALL_BEFORE_WAITING_MS = 8000;
 
 /**
  * A connectivity blip (Wi-Fi <-> mobile data hand-over, a tunnel) fires `offline` / `online` while
- * YouTube keeps playing from its buffer: that must not interrupt anything. Only a live stream that the
+ * YouTube keeps playing from its buffer: that must not interrupt anything. Only a stream that the
  * listener wants to hear, stuck loading / buffering for 8 s while the device is offline, counts as
  * "waiting for the network" (besides an unloadable player API or a player error while offline, see
  * `planStreamErrorRecovery`).
  */
 export function shouldWaitForNetworkAfterStall(options: {
   isPlaying: boolean;
-  isLive: boolean;
   streamStatus: StreamStatus;
   stalledForMs: number;
   online: boolean;
 }): boolean {
   const stalled = options.streamStatus === 'loading' || options.streamStatus === 'buffering';
-  return (
-    options.isPlaying && options.isLive && stalled && !options.online && options.stalledForMs >= STALL_BEFORE_WAITING_MS
-  );
+  return options.isPlaying && stalled && !options.online && options.stalledForMs >= STALL_BEFORE_WAITING_MS;
 }
 
 /**
@@ -119,33 +116,4 @@ export function shortcutForKey(
   if (event.key === 'ArrowRight') return 'seekForward';
   if (event.key === 'ArrowLeft') return 'seekBackward';
   return null;
-}
-
-export interface SearchHistoryState {
-  /** A history entry for the search screen is on the stack. */
-  entryPushed: boolean;
-}
-
-export type SearchHistoryEvent =
-  | { type: 'searchModeChanged'; inSearch: boolean }
-  /** The browser / Android Back button popped a history entry. */
-  | { type: 'popstate' };
-
-/**
- * Hardware / browser Back while searching clears the search instead of leaving the app. Entering
- * search pushes exactly one entry; clearing the search in the UI removes it again; Back without a
- * search is never intercepted.
- */
-export function searchHistoryStep(
-  state: SearchHistoryState,
-  event: SearchHistoryEvent
-): { state: SearchHistoryState; effect: 'push' | 'back' | 'clearSearch' | null } {
-  if (event.type === 'popstate') {
-    return state.entryPushed
-      ? { state: { entryPushed: false }, effect: 'clearSearch' }
-      : { state, effect: null };
-  }
-  if (event.inSearch && !state.entryPushed) return { state: { entryPushed: true }, effect: 'push' };
-  if (!event.inSearch && state.entryPushed) return { state: { entryPushed: false }, effect: 'back' };
-  return { state, effect: null };
 }
