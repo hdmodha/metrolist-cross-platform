@@ -26,10 +26,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Run unit tests & security checks
         run: npx tsx --test src/utils/metrolistCore.test.ts
@@ -42,7 +41,7 @@ jobs:
 
       - name: Archive Portable Web & Full-Stack Server Release
         run: |
-          zip -r metrolist-portable-web-and-server.zip dist server.ts package.json package-lock.json Dockerfile README.md
+          7z a -tzip metrolist-portable-web-and-server.zip dist server.ts package.json Dockerfile README.md
 
       - name: Upload Web & Server Artifact
         uses: actions/upload-artifact@v4
@@ -50,7 +49,7 @@ jobs:
           name: metrolist-web-release
           path: metrolist-portable-web-and-server.zip
 
-  # 2. Build Native Desktop Packages (macOS .dmg/.zip & Windows .exe)
+  # 2. Build Native Desktop Packages (macOS & Windows)
   build-desktop-native:
     needs: verify-and-bundle-web
     strategy:
@@ -59,10 +58,8 @@ jobs:
         include:
           - os: macos-latest
             platform_name: macos-universal
-            ext: dmg
           - os: windows-latest
             platform_name: windows-x64
-            ext: exe
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -72,18 +69,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "npm"
 
       - name: Install dependencies & build frontend
+        shell: bash
         run: |
-          npm install
+          npm install --legacy-peer-deps
           npm run build
 
-      - name: Package Native Desktop App (Nativefier / Electron Wrapper)
+      - name: Package Native Desktop Standalone Archive
         shell: bash
         run: |
           mkdir -p release-desktop
-          zip -r "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist server.ts package.json README.md
+          7z a -tzip "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist server.ts package.json README.md
 
       - name: Upload Desktop Artifact (${{ matrix.platform_name }})
         uses: actions/upload-artifact@v4
@@ -103,7 +100,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "npm"
 
       - name: Setup Java 17 for Android Gradle
         uses: actions/setup-java@v4
@@ -113,20 +109,24 @@ jobs:
 
       - name: Install dependencies & build web assets
         run: |
-          npm install
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Generate Android & iOS Native Capacitor Projects
         run: |
-          npm install --no-save @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
+          npm install --no-save --legacy-peer-deps @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
           npx cap add android || true
           npx cap add ios || true
-          npx cap sync
+          npx cap sync || true
           mkdir -p release-mobile
-          zip -r release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
-          zip -r release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json
+          if [ -d "android" ]; then
+            7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+          fi
+          if [ -d "ios" ]; then
+            7z a -tzip release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json
+          fi
 
-      - name: Build Signed/Debug Android APK (if Android SDK available)
+      - name: Build Android APK
         continue-on-error: true
         run: |
           if [ -d "android" ]; then
@@ -155,8 +155,8 @@ jobs:
       - name: Create GitHub Release & Attach Binaries
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.release_tag || 'v1.0.0' }}
-          name: "Metrolist Cross-Platform Release (${{ github.ref_name != 'main' && github.ref_name || inputs.release_tag || 'v1.0.0' }})"
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: "Metrolist Cross-Platform Release (${{ inputs.release_tag || github.ref_name }})"
           draft: false
           prerelease: false
           generate_release_notes: true

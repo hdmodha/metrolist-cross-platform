@@ -25,34 +25,24 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 
 ---
 
-## How to Upload to GitHub & Publish Stable Releases
+## Local Development
 
-### Step 1: Upload to GitHub from Google AI Studio
-1. Click the **Export to GitHub** (or **Download ZIP**) button at the top of Google AI Studio.
-2. If using the downloaded ZIP, initialize Git and push to your new public GitHub repository:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial open-source release of Metrolist Cross-Platform"
-   git branch -M main
-   git remote add origin https://github.com/<your-username>/<your-repo>.git
-   git push -u origin main
-   ```
-
-### Step 2: Automatically Build & Publish Native Releases (`v1.0.0`)
-This repository includes `.github/workflows/release-native-builds.yml`. Whenever you push a version tag (or trigger the workflow in the **Actions** tab), GitHub Actions automatically runs the test suite, builds the **Android `.apk`**, **iOS Xcode bundle**, **macOS**, **Windows**, and **Web** packages, and publishes them on your repository's **Releases** page:
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+# Install dependencies
+npm install
+
+# Run unit tests (InnerTube, Recommendations & Security checks)
+npx tsx --test src/utils/metrolistCore.test.ts
+
+# Start development server (Express + Vite on http://localhost:3000)
+npm run dev
+
+# Build for production
+npm run build
 ```
-Or on GitHub.com:
-1. Go to your repository's **Actions** tab.
-2. Click **Build & Publish Release Artifacts (macOS, Windows, Android, iOS, Web)**.
-3. Click **Run workflow** → enter `v1.0.0` → click **Run workflow**.
-4. In ~2 minutes, your downloadable `.apk` and desktop/mobile packages will appear under **Releases** on the right sidebar of your GitHub repo!
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for local setup, testing (`npx tsx --test src/utils/metrolistCore.test.ts`), and native build instructions.
+Contributions are welcome! Please read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for local setup, testing, and native build instructions.
