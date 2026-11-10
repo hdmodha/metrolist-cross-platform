@@ -37,22 +37,36 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
 ├── server.ts                              # Express backend: InnerTube search, RDAMVM recommendations
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
 ├── src/
-│   ├── App.tsx                            # Root SPA state: playback lifecycle, queue, MediaSession, recommendations
+│   ├── App.tsx                            # Thin composition: usePlayer() + view state (search, filter, drawer tab)
 │   ├── data/
-│   │   └── metrolistData.ts               # `MetrolistTrack` interface + seed catalog (seed covers resolved via `new URL(..., import.meta.url)`)
-│   ├── components/
-│   │   ├── PlayerLibraryView.tsx          # Main Spotify-style view: Hero card, Live YT Search, Up Next Radio, Library
-│   │   ├── QueueDrawer.tsx                # Right drawer: Up Next Queue manager, 5-Band Parametric EQ
+│   │   ├── metrolistData.ts               # `MetrolistTrack` interface + seed catalog (seed covers resolved via `new URL(..., import.meta.url)`)
+│   │   └── fallbackTracks.ts              # Offline-safe shelf (STATIC_YTM_FALLBACK)
+│   ├── components/                        # Presentational, React.memo'd; no playback logic
+│   │   ├── AppHeader.tsx                  # Sticky header: brand, library filters, Autoplay Radio toggle
+│   │   ├── PlayerLibraryView.tsx          # Search, hero, shelves (YtTrackCard), library rows (LibraryRow)
+│   │   ├── TrackMenu.tsx                  # Per-track "More" menu (play next, add to queue, like, download), portal + keyboard
+│   │   ├── QueueDrawer.tsx                # Up Next queue (clear, move, remove, labels) + 5-band EQ
+│   │   ├── SpectrumMeter.tsx              # Self-polling EQ spectrum (only while visible and a local song plays)
+│   │   ├── NowPlayingBar.tsx              # Fixed transport bar
+│   │   ├── SeekBar.tsx                    # The ONLY component subscribed to the playback clock
+│   │   ├── PlayerNotices.tsx              # Notice toast + "Waiting for connection… retrying"
+│   │   ├── useSearchBackNavigation.ts     # Android / browser Back clears the search
 │   │   └── YouTubeStreamBridge.tsx        # YouTube IFrame Player API bridge (hidden; revealed only when autoplay needs a tap)
-│   ├── player/                            # Pure, unit-tested player core (not wired into the UI yet)
-│   │   ├── playerCore.ts                  # Normalized PlayerState + playerReducer + selectors (queue, radio, failures, network)
+│   ├── player/
+│   │   ├── usePlayer.ts                   # The one hook with side effects (network, storage, stream, synth, media keys, timers)
+│   │   ├── playerCore.ts                  # Pure normalized PlayerState + playerReducer + selectors
+│   │   ├── playerStore.ts                 # Tiny external store around the reducer (read via useSyncExternalStore)
+│   │   ├── playbackClock.ts               # Playback position store outside React state
+│   │   ├── effectPolicies.ts              # Pure decisions for side effects: stream-error recovery, save throttle, shortcuts, Back
 │   │   ├── queueRules.ts                  # Queue rules: next index, add to queue / play next, play-now queue, radio merge
 │   │   └── retryPolicy.ts                 # Network back-off: 3 s · 2^attempt, capped at 30 s, 5 retries
 │   └── utils/
 │       ├── metrolistCore.ts               # Pure logic: InnerTube parsers (incl. radio pages) + shared request layer, song search terms, sanitizers
 │       ├── apiClient.ts                   # Client network layer: `/api/*` backend, `VITE_API_BASE_URL`, native-shell direct InnerTube, search cache
 │       ├── lruCache.ts                    # Pure LRU + TTL cache (time injected)
+│       ├── menuNavigation.ts              # Pure menu keyboard navigation + on-screen placement
 │       ├── persistence.ts                 # Validated localStorage persistence (library, prefs, queue) + PlayerState mappers
+│       ├── renderProbe.ts                 # countRender(): no-op unless a browser test sets window.__renderProbe
 │       └── webAudioSynth.ts               # Web Audio API 5-band BiquadFilter EQ + real-time FFT spectrum analyzer
 │   (every module has its `*.test.ts` next to it; `npm test` runs them all)
 └── .github/workflows/
@@ -71,22 +85,24 @@ The app is a single-page, Spotify-style cross-platform music player inspired by 
    - The UI never substitutes unrelated songs for a search: it shows loading, "No songs found", or an error with Retry.
 
 2. **YouTube Music Recommendations / Radio (`GET /api/innertube/recommendations?videoId=...`)**:
-   - Whenever the active track id changes in `src/App.tsx`, it calls `fetchRecommendations()` (`/api/innertube/recommendations`).
+   - Whenever the active track id (or Autoplay Radio) changes, `usePlayer.ts` calls `fetchRecommendations()` and dispatches `recommendationsLoaded` / `recommendationsFailed` (fallback shelf).
    - `server.ts` calls `https://music.youtube.com/youtubei/v1/next` with playlist `RDAMVM${seedVideoId}`.
-   - `parseInnerTubeWatchNextPage` extracts recommended tracks (live streams and >20 min mixes are dropped) and the radio continuation token (`playlistPanelRenderer.continuations[0].nextRadioContinuationData.continuation`); the route answers `{ tracks, seedVideoId, continuation }`. When `autoplayRadio` is `ON`, `mergeRadioIntoQueue` appends them **only when fewer than 3 songs are left** (the new player core: ≤ 5) — it never replaces the queue, so hand-queued songs survive.
-   - **Radio continuation**: the same route with `&continuation=<token>` (≤ 1024 chars of `[A-Za-z0-9_\-%=.]`, checked by the linear `sanitizeRadioContinuation`; the seed must be a valid video id) re-sends the WatchNext body plus the URL-decoded token. That answer repeats the first page under `contents`, so only `continuationContents.playlistPanelContinuation` is parsed. Client: `fetchRadioContinuation()` in `apiClient.ts` (backend and native-shell paths).
+   - `parseInnerTubeWatchNextPage` extracts recommended tracks (live streams and >20 min mixes are dropped) and the radio continuation token (`playlistPanelRenderer.continuations[0].nextRadioContinuationData.continuation`); the route answers `{ tracks, seedVideoId, continuation }`. When `autoplayRadio` is `ON`, the reducer appends them (`mergeRadioIntoQueue`) **only when 5 or fewer songs are left** — it never replaces the queue, so hand-queued songs survive.
+   - **Radio continuation**: the same route with `&continuation=<token>` (≤ 1024 chars of `[A-Za-z0-9_\-%=.]`, checked by the linear `sanitizeRadioContinuation`; the seed must be a valid video id) re-sends the WatchNext body plus the URL-decoded token. That answer repeats the first page under `contents`, so only `continuationContents.playlistPanelContinuation` is parsed. Client: `fetchRadioContinuation()` in `apiClient.ts` (backend and native-shell paths). `usePlayer.ts` requests the next page whenever `selectRadioContinuationRequest(state)` is non-null (`radioPageRequested` → `radioPageLoaded` / `radioPageFailed`, retried with back-off via `radioRetry`); an aborted request must still dispatch `radioPageFailed`.
 
-3. **Full-Song Audio Playback (`YouTubeStreamBridge.tsx` vs `audioEngine.ts`)**:
-   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge alone drives `currentTimeMs` (the clock never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and updates `durationMs` if the real stream duration exceeds 30s. Player errors trigger a search for another upload of the same song (terms from `deriveSongSearchTerms`), then a skip; they never fall back to the synth.
-   - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`) and App handlers through `latest.current` (`App.tsx`). The player is created once; capturing props at mount made "track ended" act on a stale queue.
-   - **Local Studio Synth seed tracks (`isLiveInnerTube: false`)**: Synthesized in real time via `src/utils/audioEngine.ts` using Web Audio oscillators + 5-band parametric `BiquadFilterNode` chain.
+3. **Full-Song Audio Playback (`YouTubeStreamBridge.tsx` vs `webAudioSynth.ts`)**:
+   - **Live YouTube Music tracks (`isLiveInnerTube: true`)**: Streamed at full length via `YouTubeStreamBridge.tsx` (YouTube IFrame API). The bridge writes the position into the playback clock (it never runs while nothing is audible), reports `streamStatus` (`loading | buffering | playing | paused | blocked`) and the real duration. Seeks carry a token and are reported handled only once applied (a seek before the player is ready is kept); `initialPositionMs` creates / cues the player at a restored position, paused; a new `retryNonce` re-creates the player (network retry). Player errors follow `planStreamErrorRecovery`: another upload of the same song (`deriveSongSearchTerms`, max 3 per track), then a skip; API unavailable / offline → `networkLost` and back-off retries. Never a synth fallback.
+   - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`); `usePlayer.ts` callbacks read `store.getState()`. The player is long-lived; capturing props at mount made "track ended" act on a stale queue.
+   - **Local Studio Synth seed tracks (`isLiveInnerTube: false`)**: Synthesized in real time via `src/utils/webAudioSynth.ts`; `usePlayer.ts` clocks them (250 ms ticks into the playback clock).
+   - **Performance rule**: the position lives in `playbackClock.ts`, not React state. Only `SeekBar` (and handlers / persistence / MediaSession via `clock.subscribe`) read it; no component above `SeekBar` may re-render on ticks (the browser suite counts renders through `countRender`).
 
 4. **Queue rules (`pickNextQueueIndex`, `insertIntoQueueAfterCurrent`, `insertIntoQueueAsNext`, `buildPlayNowQueue`, `mergeRadioIntoQueue` in `src/player/queueRules.ts`)**:
-   - Pure and unit-tested. Today Next / Previous / track-ended / repeat (`OFF | ALL | ONE`) / shuffle go through `skipTrack()` in `App.tsx`. Invariant: the playing track is always in `queue`.
+   - Pure and unit-tested, used by the reducer. Invariant: the playing track is always in the queue once playback started.
 
-5. **Player core (`src/player/playerCore.ts`, not wired into the UI yet)**:
+5. **Player core (`src/player/playerCore.ts` + `usePlayer.ts`)**:
    - `playerReducer(state, action)` over a normalized `PlayerState` (`tracksById` + id lists) plus selectors (`selectActiveTrack`, `selectQueueTracks`, `selectRadioContinuationRequest`, ...). No timers, clock or `Math.random`: randomness and positions arrive in action payloads. No-op actions return the same object; every change re-establishes the invariants (a seeded property test runs thousands of random action sequences).
-   - Saving / restoring the queue goes through `toPersistedState` / `fromPersistedState` (`persistence.ts`, same `metrolist.player.v1` key, additive fields); a restore is always paused.
+   - All playback / queue behaviour is the reducer's; components only call `usePlayer().actions` (stable identities). `Math.random` and positions are injected by the hook.
+   - Launch restores the last queue, song and position, always paused (`loadPlayerState` → `fromPersistedState` → `restore`). Saves are debounced on state change; the position is saved at most every 5 s while playing, on pause, on `visibilitychange` → hidden and on `pagehide`.
 
 ---
 
@@ -104,7 +120,7 @@ When debugging or improving the application, prioritize checking these areas:
 2. **YouTube IFrame Audio Restrictions on Mobile WebViews & Background Play**:
    - `YouTubeStreamBridge.tsx` uses a hidden `1x1` YouTube embed iframe. On mobile browsers (iOS Safari / Android WebView), autoplay without direct user gesture on the iframe or background screen-off playback can be throttled by the OS. When a requested start stays "unstarted", the bridge reports `blocked` and reveals the player with a "Tap the player to start playback" prompt.
    - Capacitor iOS serves the app from `capacitor://localhost`; YouTube embeds may reject that origin (untested).
-   - Replacing or augmenting `YouTubeStreamBridge.tsx` with direct audio stream extraction (`<audio>` element connected to `AudioContext`) enables true background playback and allows the 5-band Web Audio EQ (`audioEngine.ts`) to process live YouTube tracks directly.
+   - Replacing or augmenting `YouTubeStreamBridge.tsx` with direct audio stream extraction (`<audio>` element connected to `AudioContext`) enables true background playback and allows the 5-band Web Audio EQ (`webAudioSynth.ts`) to process live YouTube tracks directly.
 
 3. **Full-Length Duration Preservation**:
    - Never overwrite a track's `durationMs` with a 30-second preview duration (`previewUrl` from iTunes is ~30s). Keep the full duration parsed from InnerTube (`ytTrack.durationMs`) or reported by `YouTubeStreamBridge.onTimeUpdateMs`.

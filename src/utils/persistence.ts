@@ -271,7 +271,8 @@ export function toPersistedState(
   );
   const queueIds = player.queueIds.slice(start, start + MAX_SAVED_QUEUE_TRACKS);
   const queue: PersistedQueueTrack[] = [];
-  for (const id of queueIds) {
+  // Nothing played yet: the seed queue is not a session worth resuming
+  for (const id of player.hasStartedPlayback ? queueIds : []) {
     const track = player.tracksById[id];
     if (track) queue.push({ ...toLibrarySnapshot(track, track.videoId), id });
   }

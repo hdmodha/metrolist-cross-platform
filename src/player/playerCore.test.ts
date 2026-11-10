@@ -12,6 +12,7 @@ import {
   selectActiveTrack,
   selectCanRetryRadio,
   selectCanTryAlternateVideo,
+  selectIsStreamLoading,
   selectLibraryTracks,
   selectNetworkRetryDelayMs,
   selectQueueTracks,
@@ -590,6 +591,33 @@ describe('library flags and preferences', () => {
     assert.deepEqual(downloaded.libraryIds.slice(-5), ['s1', 's2', 's3', 's4', 's5']);
   });
 
+  test('liking or downloading a search card the player has not seen yet adds it to the library', () => {
+    const state = playingSeeds();
+    const liked = run(state, { type: 'toggleLike', trackId: ytId('n'), track: yt('n') });
+    assert.equal(liked.tracksById[ytId('n')].liked, true);
+    assert.equal(liked.libraryIds[0], ytId('n'));
+    assert.deepEqual(liked.queueIds, state.queueIds, 'liking does not queue the song');
+    const downloaded = run(state, { type: 'toggleDownloaded', trackId: ytId('n'), track: yt('n') });
+    assert.equal(downloaded.tracksById[ytId('n')].cachedOffline, true);
+    // A track payload whose id does not match is ignored
+    assert.equal(run(state, { type: 'toggleLike', trackId: 'other', track: yt('n') }), state);
+    assertInvariants(liked);
+  });
+
+  test('the stream counts as loading only for a live song the listener wants to hear', () => {
+    let state = run(fresh(), { type: 'playFromSearch', track: yt('a') });
+    assert.equal(selectIsStreamLoading(state), true);
+    state = run(state, { type: 'streamStatusChanged', status: 'playing' });
+    assert.equal(selectIsStreamLoading(state), false);
+    state = run(state, { type: 'streamStatusChanged', status: 'buffering' });
+    assert.equal(selectIsStreamLoading(state), true);
+    assert.equal(selectIsStreamLoading(run(state, { type: 'togglePlay' })), false);
+    // Waiting for the network also shows the spinner
+    state = run(state, { type: 'streamStatusChanged', status: 'paused' }, { type: 'networkLost' });
+    assert.equal(selectIsStreamLoading(state), true);
+    assert.equal(selectIsStreamLoading(playingSeeds()), false, 'local songs never load');
+  });
+
   test('shuffle, repeat and autoplay radio toggles', () => {
     let state = run(fresh(), { type: 'toggleShuffle' });
     assert.equal(state.shuffleEnabled, true);
@@ -893,7 +921,7 @@ function randomAction(state: PlayerState, rnd: () => number): PlayerAction {
     () => ({ type: 'removeFromQueue', trackId: anyId() }),
     () => ({ type: 'moveQueueItem', trackId: anyId(), direction: pick([-1, 1] as const) }),
     () => ({ type: 'clearUpcoming' }),
-    () => ({ type: 'toggleLike', trackId: anyId() }),
+    () => (rnd() < 0.3 ? { type: 'toggleLike', trackId: liveTrackId(vid('q')), track: yt('q') } : { type: 'toggleLike', trackId: anyId() }),
     () => ({ type: 'toggleDownloaded', trackId: anyId() }),
     () => ({ type: 'toggleShuffle' }),
     () => ({ type: 'cycleRepeat' }),

@@ -1,0 +1,130 @@
+import test, { describe } from 'node:test';
+import assert from 'node:assert/strict';
+import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
+import { createInitialPlayerState, playerReducer, type PlayerState } from './playerCore';
+import {
+  KEYBOARD_SEEK_STEP_MS,
+  STREAM_ERROR_API_UNAVAILABLE,
+  isPositionSaveDue,
+  pickAlternateUpload,
+  planStreamErrorRecovery,
+  searchHistoryStep,
+  shortcutForKey,
+} from './effectPolicies';
+
+const vid = (name: string) => `vid${name}`.padEnd(11, '_');
+const yt = (name: string): InnerTubeParsedTrack => ({
+  videoId: vid(name),
+  title: `${name.toUpperCase()} - Song ${name} (Official Video)`,
+  artist: name.toUpperCase(),
+  album: '',
+  durationMs: 200000,
+  thumbnailUrl: '',
+});
+
+function playingLive(): PlayerState {
+  return playerReducer(createInitialPlayerState([]), { type: 'playFromSearch', track: yt('a') });
+}
+
+describe('stream error recovery', () => {
+  test('an unavailable player API or an offline device waits for the network', () => {
+    const state = playingLive();
+    assert.deepEqual(planStreamErrorRecovery(state, { code: STREAM_ERROR_API_UNAVAILABLE, online: true }), { kind: 'waitForNetwork' });
+    assert.deepEqual(planStreamErrorRecovery(state, { code: 150, online: false }), { kind: 'waitForNetwork' });
+  });
+
+  test('an unplayable upload first looks for another upload of the same song', () => {
+    const plan = planStreamErrorRecovery(playingLive(), { code: 150, online: true });
+    assert.deepEqual(plan, { kind: 'findAlternate', trackId: `ytm-${vid('a')}`, query: 'A Song a', tried: [vid('a')] });
+  });
+
+  test('once 3 uploads were tried the song is skipped', () => {
+    let state = playingLive();
+    const id = `ytm-${vid('a')}`;
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a2') });
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a3') });
+    assert.deepEqual(planStreamErrorRecovery(state, { code: 100, online: true }), { kind: 'skip', trackId: id });
+  });
+
+  test('nothing to do without an active track', () => {
+    assert.equal(planStreamErrorRecovery(createInitialPlayerState([]), { code: 150, online: true }), null);
+  });
+});
+
+test('the alternate upload is the first candidate that was not tried yet', () => {
+  const candidates = [yt('a'), yt('b'), yt('c')];
+  assert.equal(pickAlternateUpload(candidates, [vid('a')])?.videoId, vid('b'));
+  assert.equal(pickAlternateUpload(candidates, [vid('a'), vid('b'), vid('c')]), null);
+  assert.equal(pickAlternateUpload([], []), null);
+});
+
+test('the position is saved at most every 5 seconds', () => {
+  assert.equal(isPositionSaveDue(null, 1000), true);
+  assert.equal(isPositionSaveDue(1000, 5999), false);
+  assert.equal(isPositionSaveDue(1000, 6000), true);
+  // A clock that went backwards (device time change) saves rather than waiting forever
+  assert.equal(isPositionSaveDue(10_000, 2000), true);
+});
+
+describe('keyboard shortcuts', () => {
+  const key = (k: string, extra: Partial<Parameters<typeof shortcutForKey>[0]> = {}) => ({
+    key: k,
+    code: k === ' ' ? 'Space' : k,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    defaultPrevented: false,
+    ...extra,
+  });
+
+  test('Space toggles playback, arrows seek by 5 s', () => {
+    assert.equal(KEYBOARD_SEEK_STEP_MS, 5000);
+    assert.equal(shortcutForKey(key(' '), false), 'togglePlay');
+    assert.equal(shortcutForKey(key('Spacebar', { code: 'Space' }), false), 'togglePlay');
+    assert.equal(shortcutForKey(key('ArrowRight'), false), 'seekForward');
+    assert.equal(shortcutForKey(key('ArrowLeft'), false), 'seekBackward');
+    assert.equal(shortcutForKey(key('k'), false), null);
+  });
+
+  test('never while typing, on a control, with modifiers or when already handled', () => {
+    assert.equal(shortcutForKey(key(' '), true), null);
+    assert.equal(shortcutForKey(key('ArrowRight'), true), null);
+    assert.equal(shortcutForKey(key(' ', { ctrlKey: true }), false), null);
+    assert.equal(shortcutForKey(key(' ', { metaKey: true }), false), null);
+    assert.equal(shortcutForKey(key('ArrowLeft', { altKey: true }), false), null);
+    assert.equal(shortcutForKey(key(' ', { defaultPrevented: true }), false), null);
+  });
+});
+
+describe('Back clears the search', () => {
+  test('entering search pushes one history entry, only once', () => {
+    let step = searchHistoryStep({ entryPushed: false }, { type: 'searchModeChanged', inSearch: true });
+    assert.deepEqual(step, { state: { entryPushed: true }, effect: 'push' });
+    step = searchHistoryStep(step.state, { type: 'searchModeChanged', inSearch: true });
+    assert.deepEqual(step, { state: { entryPushed: true }, effect: null });
+  });
+
+  test('Back while searching clears the search and does not navigate away', () => {
+    const step = searchHistoryStep({ entryPushed: true }, { type: 'popstate' });
+    assert.deepEqual(step, { state: { entryPushed: false }, effect: 'clearSearch' });
+    // The search box then empties: nothing else happens
+    assert.deepEqual(searchHistoryStep(step.state, { type: 'searchModeChanged', inSearch: false }), {
+      state: { entryPushed: false },
+      effect: null,
+    });
+  });
+
+  test('clearing the search in the UI removes our history entry again', () => {
+    assert.deepEqual(searchHistoryStep({ entryPushed: true }, { type: 'searchModeChanged', inSearch: false }), {
+      state: { entryPushed: false },
+      effect: 'back',
+    });
+  });
+
+  test('Back without a search is left to the browser / app shell (never trapped)', () => {
+    assert.deepEqual(searchHistoryStep({ entryPushed: false }, { type: 'popstate' }), {
+      state: { entryPushed: false },
+      effect: null,
+    });
+  });
+});
