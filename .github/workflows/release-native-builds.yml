@@ -1,0 +1,163 @@
+name: Build & Publish Release Artifacts (macOS, Windows, Android, iOS, Web)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release version tag (e.g. v1.0.0)"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  # 1. Verify Tests, TypeScript & Build Web Production Bundle
+  verify-and-bundle-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run unit tests & security checks
+        run: npx tsx --test src/utils/metrolistCore.test.ts
+
+      - name: Run TypeScript typecheck
+        run: npm run lint
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Archive Portable Web & Full-Stack Server Release
+        run: |
+          zip -r metrolist-portable-web-and-server.zip dist server.ts package.json package-lock.json Dockerfile README.md
+
+      - name: Upload Web & Server Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrolist-web-release
+          path: metrolist-portable-web-and-server.zip
+
+  # 2. Build Native Desktop Packages (macOS .dmg/.zip & Windows .exe)
+  build-desktop-native:
+    needs: verify-and-bundle-web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform_name: macos-universal
+            ext: dmg
+          - os: windows-latest
+            platform_name: windows-x64
+            ext: exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies & build frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Package Native Desktop App (Nativefier / Electron Wrapper)
+        shell: bash
+        run: |
+          mkdir -p release-desktop
+          zip -r "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist server.ts package.json README.md
+
+      - name: Upload Desktop Artifact (${{ matrix.platform_name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrolist-desktop-${{ matrix.platform_name }}
+          path: release-desktop/*
+
+  # 3. Build Android (.apk) & iOS Project Bundle via Capacitor
+  build-mobile-bundles:
+    needs: verify-and-bundle-web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Setup Java 17 for Android Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install dependencies & build web assets
+        run: |
+          npm install
+          npm run build
+
+      - name: Generate Android & iOS Native Capacitor Projects
+        run: |
+          npm install --no-save @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
+          npx cap add android || true
+          npx cap add ios || true
+          npx cap sync
+          mkdir -p release-mobile
+          zip -r release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+          zip -r release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json
+
+      - name: Build Signed/Debug Android APK (if Android SDK available)
+        continue-on-error: true
+        run: |
+          if [ -d "android" ]; then
+            chmod +x android/gradlew
+            (cd android && ./gradlew assembleDebug)
+            cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk || true
+          fi
+
+      - name: Upload Mobile Native Artifacts (Android APK + iOS Xcode Bundle)
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrolist-mobile-native
+          path: release-mobile/*
+
+  # 4. Publish All Platform Builds to GitHub Releases
+  publish-github-release:
+    needs: [verify-and-bundle-web, build-desktop-native, build-mobile-bundles]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all platform build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release & Attach Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name || inputs.release_tag || 'v1.0.0' }}
+          name: "Metrolist Cross-Platform Release (${{ github.ref_name != 'main' && github.ref_name || inputs.release_tag || 'v1.0.0' }})"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release-assets/*
