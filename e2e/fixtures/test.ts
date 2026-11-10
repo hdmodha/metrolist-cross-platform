@@ -96,100 +96,203 @@ async function installRoutes(context: BrowserContext, api: MockApi, unexpected: 
   });
 }
 
-/** Drives the app the way a listener does; all locators use accessible names the UI keeps stable. */
+/** What `open({ storage })` writes to localStorage before the app first loads (raw strings). */
+export type SeedStorage = Record<string, string>;
+
+/**
+ * Drives the app the way a listener does; all locators use accessible names the UI keeps stable.
+ * Phones (< 1024 px) reach the transport controls in Now Playing; desktop in the player bar.
+ */
 export class MetrolistApp {
   constructor(readonly page: Page) {}
 
-  async open(options: { yt?: FakeYouTubeOptions; renderProbe?: boolean; path?: string } = {}): Promise<void> {
+  async open(options: { yt?: FakeYouTubeOptions; renderProbe?: boolean; path?: string; storage?: SeedStorage } = {}): Promise<void> {
     await this.page.addInitScript(
-      ({ yt, renderProbe }) => {
+      ({ yt, renderProbe, storage }) => {
         const w = window as unknown as { __yt?: unknown; __renderProbe?: Record<string, number> };
         if (yt) w.__yt = { ...yt };
         if (renderProbe) w.__renderProbe = {};
+        // Seed storage once per tab: a reload must see what the app saved, not the seed again
+        if (storage && !sessionStorage.getItem('__e2eSeeded')) {
+          sessionStorage.setItem('__e2eSeeded', '1');
+          for (const [key, value] of Object.entries(storage)) localStorage.setItem(key, value);
+        }
       },
-      { yt: options.yt ?? null, renderProbe: !!options.renderProbe }
+      { yt: options.yt ?? null, renderProbe: !!options.renderProbe, storage: options.storage ?? null }
     );
     await this.page.goto(options.path ?? '/');
-    await expect(this.footer).toBeVisible();
+    await expect(this.main).toBeVisible();
   }
 
-  get footer(): Locator {
-    return this.page.locator('footer[aria-label="Now Playing Audio Transport Bar"]');
+  get isDesktop(): boolean {
+    return (this.page.viewportSize()?.width ?? 0) >= 1024;
   }
+
+  /* ---------------------------------------- navigation ---------------------------------------- */
+
+  get main(): Locator {
+    return this.page.locator('main');
+  }
+  get nav(): Locator {
+    return this.page.locator('nav[aria-label="Main"]:visible');
+  }
+  get heading(): Locator {
+    return this.main.locator('h1');
+  }
+  tab(name: 'Home' | 'Search' | 'Library'): Locator {
+    return this.nav.getByRole('link', { name, exact: true });
+  }
+  async goTo(name: 'Home' | 'Search' | 'Library'): Promise<void> {
+    await this.closeNowPlaying();
+    await this.tab(name).click();
+    await expect(this.tab(name)).toHaveAttribute('aria-current', 'page');
+  }
+  /** Opens Liked Songs / Downloads from the Library page. */
+  async openCollection(name: 'Liked Songs' | 'Downloads'): Promise<void> {
+    await this.goTo('Library');
+    await this.main.getByRole('link', { name: new RegExp(`^${name}`) }).click();
+    await expect(this.heading).toHaveText(name);
+  }
+  hash(): Promise<string> {
+    return this.page.evaluate(() => location.hash);
+  }
+
+  /* ------------------------------------------ search ------------------------------------------ */
+
   get searchInput(): Locator {
     return this.page.locator('form[role="search"] input[type="search"]');
   }
   get results(): Locator {
     return this.page.locator('section[aria-label="Search results"]');
   }
-  get featured(): Locator {
-    return this.page.locator('section[aria-label="Featured songs"]');
-  }
-  get heroTitle(): Locator {
-    return this.page.locator('h1');
-  }
-  get seekBar(): Locator {
-    return this.page.locator('input[aria-label="Seek playback position"]:visible');
-  }
-  get playButton(): Locator {
-    return this.page.locator('button[aria-label="Start Playback"]');
-  }
-  get pauseButton(): Locator {
-    return this.page.locator('button[aria-label="Pause Playback"]');
-  }
-  get nextButton(): Locator {
-    return this.page.locator('button[aria-label="Next Track"]');
-  }
-  get previousButton(): Locator {
-    return this.page.locator('button[aria-label="Previous Track"]');
-  }
-  get drawer(): Locator {
-    return this.page.locator('#inspector-drawer');
-  }
-  get notice(): Locator {
-    return this.page.locator('[role="status"][aria-live="polite"]');
-  }
-  get waitingBanner(): Locator {
-    return this.page.getByText('Waiting for connection… retrying');
-  }
-  get libraryRows(): Locator {
-    return this.page.locator('[role="button"][aria-label^="Play "]');
-  }
-  resultCards(): Locator {
+  resultRows(): Locator {
     return this.results.locator('button[aria-label^="Play "], button[aria-label^="Pause "]');
+  }
+  /** Song buttons (rows or cards) inside `scope`. */
+  songButtons(scope: Locator): Locator {
+    return scope.locator('button[aria-label^="Play "], button[aria-label^="Pause "]');
+  }
+  async titleOf(songButton: Locator): Promise<string> {
+    return ((await songButton.locator('.song-title').textContent()) ?? '').trim();
+  }
+  /** Lists of song titles (rows or cards) inside `scope`, in order. */
+  titlesIn(scope: Locator): Promise<string[]> {
+    return scope.locator('.song-title').allTextContents();
   }
 
   /** Types a query and submits it with Enter (the on-screen keyboard's Search key). */
   async search(query: string): Promise<void> {
+    if (!(await this.searchInput.isVisible())) await this.goTo('Search');
     await this.searchInput.fill(query);
     await this.searchInput.press('Enter');
   }
 
   async searchAndPlayFirst(query: string): Promise<string> {
     await this.search(query);
-    const first = this.resultCards().first();
+    const first = this.resultRows().first();
     await expect(first).toBeVisible();
-    const title = (await first.locator('.font-semibold').textContent()) ?? '';
+    const title = await this.titleOf(first);
     await first.click();
     await expect.poll(() => this.ytState()).toBe(1);
     return title;
   }
 
+  /* ------------------------------------------ player ------------------------------------------ */
+
+  get miniPlayer(): Locator {
+    return this.page.locator('div[data-chrome="bottom"]').filter({ has: this.page.locator('[data-current-title]') });
+  }
+  get playerBar(): Locator {
+    return this.page.locator('footer[aria-label="Player"]');
+  }
+  get nowPlaying(): Locator {
+    return this.page.getByRole('dialog', { name: 'Now Playing' });
+  }
+  /** The title of the loaded song (mini player, player bar or Now Playing). */
+  get currentTitle(): Locator {
+    return this.page.locator('[data-current-title]:visible').last();
+  }
+
+  async openNowPlaying(): Promise<void> {
+    if (await this.nowPlaying.isVisible()) return;
+    await this.page.locator('button[aria-label="Open Now Playing"]:visible').click();
+    await expect(this.nowPlaying).toBeVisible();
+    // Wait for the slide-in to finish
+    await expect.poll(() => this.nowPlaying.evaluate((el) => el.getAnimations().length)).toBe(0);
+  }
+  async closeNowPlaying(): Promise<void> {
+    if (!(await this.nowPlaying.isVisible())) return;
+    await this.nowPlaying.getByRole('button', { name: 'Close Now Playing' }).click();
+    await expect(this.nowPlaying).toHaveCount(0);
+  }
+  /** Makes the transport controls reachable: the player bar on desktop, Now Playing on phones. */
+  async showControls(): Promise<void> {
+    if (!this.isDesktop) await this.openNowPlaying();
+  }
+  /** The top-most visible control with this accessible name (Now Playing covers the player bar). */
+  control(name: string): Locator {
+    return this.page.locator(`button[aria-label="${name}"]:visible`).last();
+  }
+  get playButton(): Locator {
+    return this.control('Start Playback');
+  }
+  get pauseButton(): Locator {
+    return this.control('Pause Playback');
+  }
+  get nextButton(): Locator {
+    return this.control('Next Track');
+  }
+  get previousButton(): Locator {
+    return this.control('Previous Track');
+  }
+  get shuffleButton(): Locator {
+    return this.control('Shuffle');
+  }
+  get repeatButton(): Locator {
+    return this.page.locator('button[aria-label^="Repeat: "]:visible').last();
+  }
+  get seekBar(): Locator {
+    return this.page.locator('input[aria-label="Seek playback position"]:visible').last();
+  }
+  async seekValue(): Promise<number> {
+    return Number(await this.seekBar.inputValue());
+  }
+
+  get queue(): Locator {
+    return this.page.locator('section[aria-label="Queue"]');
+  }
+  /** Shows the queue (inside Now Playing). */
   async openQueue(): Promise<void> {
-    await this.drawer.getByRole('tab', { name: /Queue/ }).click();
+    if (await this.queue.isVisible()) return;
+    if (this.isDesktop && !(await this.nowPlaying.isVisible())) {
+      await this.playerBar.getByRole('button', { name: 'Queue', exact: true }).click();
+    } else {
+      await this.openNowPlaying();
+      await this.nowPlaying.getByRole('button', { name: /^Up next/ }).click();
+    }
+    await expect(this.queue).toBeVisible();
   }
-
-  /** Titles in the queue drawer, in play order. */
+  /** Hides the queue again (on phones it covers the Now Playing controls). */
+  async closeQueue(): Promise<void> {
+    if (!(await this.queue.isVisible())) return;
+    await this.queue.getByRole('button', { name: 'Close queue' }).click();
+    await expect(this.queue).toHaveCount(0);
+  }
+  /** The current song and the upcoming ones, in play order. */
   queueTitles(): Promise<string[]> {
-    return this.drawer
-      .locator('[aria-label^="Play "], [aria-label^="Now playing "]')
-      .evaluateAll((els) => els.map((el) => el.querySelector('.font-semibold')?.textContent ?? ''));
+    return this.queue.locator('.song-title').allTextContents();
   }
-
-  async upcomingTitles(): Promise<string[]> {
-    const titles = await this.queueTitles();
-    const current = await this.heroTitle.textContent();
-    return titles.slice(titles.indexOf(current ?? '') + 1);
+  upcomingTitles(): Promise<string[]> {
+    return this.queue.locator('ul[aria-label="Next up"] .song-title').allTextContents();
+  }
+  get autoplaySwitch(): Locator {
+    return this.page.getByRole('switch', { name: /Autoplay similar songs/ });
+  }
+  get notice(): Locator {
+    return this.page.locator('[role="status"][aria-live="polite"]');
+  }
+  get waitingBanner(): Locator {
+    return this.page.getByText('Waiting for connection… retrying');
   }
 
   /** Opens the n-th "More options" menu inside `scope`, picks `item`, returns the track title. */
@@ -200,10 +303,6 @@ export class MetrolistApp {
     await this.page.getByRole('menuitem', { name: item, exact: true }).click();
     await expect(this.page.getByRole('menu')).toHaveCount(0);
     return title;
-  }
-
-  async seekValue(): Promise<number> {
-    return Number(await this.seekBar.inputValue());
   }
 
   yt(): Promise<FakePlayerDebug | null> {

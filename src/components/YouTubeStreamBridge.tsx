@@ -451,7 +451,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
       aria-hidden={!isBlocked}
       className={
         isBlocked
-          ? 'fixed right-3 z-50 w-64 max-w-[calc(100vw-1.5rem)] rounded-xl overflow-hidden border border-emerald-500/50 bg-zinc-950 shadow-2xl bottom-[calc(5.75rem+env(safe-area-inset-bottom))]'
+          ? 'fixed right-3 z-[70] w-64 max-w-[calc(100vw-1.5rem)] rounded-xl overflow-hidden border border-emerald-500/50 bg-zinc-950 shadow-2xl bottom-[calc(var(--chrome-bottom)+0.75rem)]'
           : 'fixed bottom-0 right-0 w-px h-px opacity-0 pointer-events-none overflow-hidden'
       }
     >

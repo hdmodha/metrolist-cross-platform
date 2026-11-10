@@ -1,152 +1,212 @@
 import React from 'react';
-import { STATIC_YTM_FALLBACK } from './data/fallbackTracks';
-import { liveTrackId, selectLibraryTracks, selectQueueTracks } from './player/playerCore';
-import { usePlayer } from './player/usePlayer';
-import { AppHeader, type LibraryFilter } from './components/AppHeader';
-import { NowPlayingBar } from './components/NowPlayingBar';
-import { PlayerLibraryView, isSearchQuery } from './components/PlayerLibraryView';
-import { PlayerNotices } from './components/PlayerNotices';
-import { QueueDrawer, type DrawerTab } from './components/QueueDrawer';
+import { AppActionsContext, type AppActions } from './app/AppActionsContext';
+import { formatRoute, navigate, type HistoryFlags, type Route } from './app/router';
+import { useNowPlaying } from './app/useNowPlaying';
+import { useRoute } from './app/useRoute';
+import { BottomNav } from './components/BottomNav';
+import { MiniPlayer } from './components/MiniPlayer';
+import { Notices } from './components/Notices';
+import { NowPlaying } from './components/NowPlaying';
+import { PlayerBar } from './components/PlayerBar';
+import { Sidebar } from './components/Sidebar';
 import { YouTubeStreamBridge } from './components/YouTubeStreamBridge';
-import { useSearchBackNavigation } from './components/useSearchBackNavigation';
+import { CollectionPage } from './pages/CollectionPage';
+import { HomePage } from './pages/HomePage';
+import { LibraryPage } from './pages/LibraryPage';
+import { SearchPage } from './pages/SearchPage';
+import {
+  selectDownloadedTracks,
+  selectLikedTracks,
+  selectQueueTracks,
+  selectRecentlyPlayedTracks,
+} from './player/playerCore';
+import { usePlayer } from './player/usePlayer';
 import { countRender } from './utils/renderProbe';
 
-/** Two-column layout (content + drawer) starts at Tailwind's `lg` breakpoint. */
-const TWO_COLUMN_MIN_WIDTH = 1024;
+const DESKTOP_QUERY = '(min-width: 1024px)';
 
-function prefersReducedMotion(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-}
-
+/**
+ * The app shell: player state (`usePlayer`), the route (`useRoute`) and Now Playing
+ * (`useNowPlaying`) in, pages and chrome out. It never re-renders on playback ticks.
+ */
 export default function App() {
   countRender('App');
   const player = usePlayer();
-  const { state, actions, activeTrack } = player;
+  const { state, actions, activeTrack, clock } = player;
+  const route = useRoute();
+  const nowPlaying = useNowPlaying(activeTrack !== null);
+  const [queueFirst, setQueueFirst] = React.useState(false);
 
-  // View-only state
-  const [searchQuery, setSearchQuery] = React.useState('');
-  const [libraryFilter, setLibraryFilter] = React.useState<LibraryFilter>('ALL');
-  const [drawerTab, setDrawerTab] = React.useState<DrawerTab>('QUEUE');
-
-  const clearSearch = React.useCallback(() => setSearchQuery(''), []);
-  useSearchBackNavigation(isSearchQuery(searchQuery), clearSearch);
-
-  const { tracksById, libraryIds, queueIds, userQueuedIds: userQueuedList, recommendations } = state;
-  const libraryTracks = React.useMemo(() => selectLibraryTracks({ tracksById, libraryIds }), [tracksById, libraryIds]);
+  const { tracksById, likedIds, downloadedIds, recentlyPlayedIds, queueIds } = state;
+  const likedTracks = React.useMemo(() => selectLikedTracks({ tracksById, likedIds }), [tracksById, likedIds]);
+  const downloadedTracks = React.useMemo(() => selectDownloadedTracks({ tracksById, downloadedIds }), [tracksById, downloadedIds]);
+  const recentTracks = React.useMemo(() => selectRecentlyPlayedTracks({ tracksById, recentlyPlayedIds }), [tracksById, recentlyPlayedIds]);
   const queueTracks = React.useMemo(() => selectQueueTracks({ tracksById, queueIds }), [tracksById, queueIds]);
-  const userQueuedIds = React.useMemo(() => new Set(userQueuedList), [userQueuedList]);
-  const activeId = activeTrack?.id ?? '';
-  const shelf = React.useMemo(
-    () =>
-      recommendations.length > 0
-        ? recommendations
-        : STATIC_YTM_FALLBACK.filter((t) => liveTrackId(t.videoId) !== activeId),
-    [recommendations, activeId]
-  );
+  const likedSet = React.useMemo(() => new Set(likedIds), [likedIds]);
+  const downloadedSet = React.useMemo(() => new Set(downloadedIds), [downloadedIds]);
 
-  const goHome = React.useCallback(() => {
-    setLibraryFilter('ALL');
-    setSearchQuery('');
-    window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  }, []);
+  const { open: openNowPlaying, close: closeNowPlaying, leaveForNavigation } = nowPlaying;
+  const appActions = React.useMemo<AppActions>(() => {
+    const go = (to: Route, options: { flags?: HistoryFlags } = {}) => {
+      const replace = leaveForNavigation();
+      if (!replace && !options.flags && formatRoute(to) === window.location.hash) {
+        window.scrollTo(0, 0);
+        return;
+      }
+      navigate(to, { replace, flags: options.flags });
+      window.scrollTo(0, 0);
+    };
+    return {
+      player: actions,
+      go,
+      goToArtist: (artist: string) => go({ name: 'search', query: artist }),
+      openNowPlaying: () => {
+        setQueueFirst(false);
+        openNowPlaying();
+      },
+      closeNowPlaying,
+    };
+  }, [actions, closeNowPlaying, leaveForNavigation, openNowPlaying]);
 
-  const openDrawerTab = React.useCallback((tab: DrawerTab) => {
-    setDrawerTab(tab);
-    if (window.innerWidth < TWO_COLUMN_MIN_WIDTH) {
-      document
-        .getElementById('inspector-drawer')
-        ?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  const openQueue = React.useCallback(() => {
+    setQueueFirst(true);
+    openNowPlaying();
+  }, [openNowPlaying]);
+
+  // Focus returns to the control that opened Now Playing when it closes
+  const miniExpandRef = React.useRef<HTMLButtonElement | null>(null);
+  const barExpandRef = React.useRef<HTMLButtonElement | null>(null);
+  const wasOpenRef = React.useRef(false);
+  React.useEffect(() => {
+    if (nowPlaying.isOpen) {
+      wasOpenRef.current = true;
+      return;
     }
-  }, []);
+    if (!wasOpenRef.current) return;
+    wasOpenRef.current = false;
+    const desktop = window.matchMedia?.(DESKTOP_QUERY).matches;
+    (desktop ? barExpandRef.current : miniExpandRef.current)?.focus({ preventScroll: true });
+  }, [nowPlaying.isOpen]);
+
+  const status = {
+    activeTrackId: state.activeTrackId,
+    isPlaying: state.isPlaying,
+    likedIds: likedSet,
+    downloadedIds: downloadedSet,
+  };
+
+  let page: React.ReactNode;
+  switch (route.name) {
+    case 'search':
+      page = <SearchPage query={route.query} {...status} />;
+      break;
+    case 'library':
+      page = (
+        <LibraryPage likedCount={likedTracks.length} downloadedCount={downloadedTracks.length} recentTracks={recentTracks} {...status} />
+      );
+      break;
+    case 'liked':
+      page = <CollectionPage key="liked" kind="liked" tracks={likedTracks} playingFrom={state.playingFrom} {...status} />;
+      break;
+    case 'downloads':
+      page = <CollectionPage key="downloads" kind="downloads" tracks={downloadedTracks} playingFrom={state.playingFrom} {...status} />;
+      break;
+    default:
+      page = (
+        <HomePage
+          activeTrack={activeTrack}
+          recentTracks={recentTracks}
+          likedTracks={likedTracks}
+          recommendations={state.recommendations}
+          isLoadingRecommendations={player.isLoadingRecommendations}
+          {...status}
+        />
+      );
+  }
+
+  const liked = activeTrack ? likedSet.has(activeTrack.id) : false;
 
   return (
-    <div className="min-h-screen bg-[#09090B] text-zinc-100 flex flex-col selection:bg-emerald-500/30">
-      <AppHeader
-        libraryFilter={libraryFilter}
-        onLibraryFilterChange={setLibraryFilter}
-        onHome={goHome}
-        autoplayRadio={state.autoplayRadio}
-        onToggleAutoplayRadio={actions.toggleAutoplayRadio}
-      />
+    <AppActionsContext.Provider value={appActions}>
+      <div
+        className="app-shell min-h-dvh bg-[#09090B] text-zinc-100 selection:bg-emerald-500/30"
+        data-player={activeTrack ? 'on' : 'off'}
+      >
+        <div inert={nowPlaying.isOpen}>
+          <Sidebar route={route} likedCount={likedTracks.length} downloadedCount={downloadedTracks.length} />
 
-      <main className="flex-1 max-w-[1600px] w-full mx-auto pt-5 short:pt-3 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-[calc(7rem+env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:pl-[max(1.5rem,env(safe-area-inset-left))] sm:pr-[max(1.5rem,env(safe-area-inset-right))]">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-7 xl:col-span-8 min-w-0">
-            <PlayerLibraryView
-              libraryTracks={libraryTracks}
-              tracksById={tracksById}
-              activeTrack={activeTrack}
-              isPlaying={state.isPlaying}
-              isStreamLoading={player.isStreamLoading}
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              libraryFilter={libraryFilter}
-              recommendations={shelf}
-              isLoadingRecommendations={player.isLoadingRecommendations}
-              onTogglePlay={actions.togglePlay}
-              onPlaySearchResult={actions.playSearchResult}
-              onPlayFromList={actions.playFromList}
-              onPlayNext={actions.playNext}
-              onAddToQueue={actions.addToQueue}
-              onToggleLike={actions.toggleLike}
-              onToggleDownloaded={actions.toggleDownloaded}
-            />
+          <main className="page lg:ml-64 min-w-0">{page}</main>
+
+          <div
+            data-chrome="bottom"
+            className="lg:hidden fixed inset-x-0 bottom-0 z-40 pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] bg-gradient-to-t from-[#09090B] from-60% to-[#09090B]/85 backdrop-blur-md"
+          >
+            {activeTrack && (
+              <MiniPlayer
+                track={activeTrack}
+                clock={clock}
+                isPlaying={state.isPlaying}
+                isLoading={player.isStreamLoading}
+                liked={liked}
+                onTogglePlay={actions.togglePlay}
+                onToggleLike={actions.toggleLike}
+                onExpand={appActions.openNowPlaying}
+                expandRef={miniExpandRef}
+              />
+            )}
+            <BottomNav route={route} />
           </div>
 
-          <aside
-            id="inspector-drawer"
-            aria-label="Queue and Equalizer Inspector"
-            className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-20 scroll-mt-20 min-w-0"
-          >
-            <QueueDrawer
-              activeTab={drawerTab}
-              onTabChange={setDrawerTab}
-              activeTrackId={activeId}
-              activeTrackIsLive={player.isLive}
-              queue={queueTracks}
-              userQueuedIds={userQueuedIds}
-              onPlayQueueItem={actions.playQueueItem}
-              onMoveQueueItem={actions.moveQueueItem}
-              onRemoveQueueItem={actions.removeFromQueue}
-              onClearUpcoming={actions.clearUpcoming}
+          {activeTrack && (
+            <PlayerBar
+              track={activeTrack}
+              clock={clock}
+              isPlaying={state.isPlaying}
+              isLoading={player.isStreamLoading}
+              liked={liked}
               shuffleEnabled={state.shuffleEnabled}
-              onToggleShuffle={actions.toggleShuffle}
               repeatMode={state.repeatMode}
-              onCycleRepeatMode={actions.cycleRepeat}
-              eqGains={player.audio.eqGains}
-              onChangeEqGain={actions.setEqGain}
-              onResetEq={actions.resetEq}
-              spectrumActive={state.isPlaying && !!activeTrack && !player.isLive}
+              volume={player.audio.volume}
+              isMuted={player.audio.isMuted}
+              onTogglePlay={actions.togglePlay}
+              onNext={actions.next}
+              onPrevious={actions.previous}
+              onSeek={actions.seekTo}
+              onToggleShuffle={actions.toggleShuffle}
+              onCycleRepeat={actions.cycleRepeat}
+              onToggleLike={actions.toggleLike}
+              onVolumeChange={actions.setVolume}
+              onToggleMute={actions.toggleMute}
+              onOpenQueue={openQueue}
+              onExpand={appActions.openNowPlaying}
+              expandRef={barExpandRef}
             />
-          </aside>
+          )}
         </div>
-      </main>
 
-      {/* Full-length YouTube stream (hidden unless the browser demands a tap to start) */}
-      {player.stream && <YouTubeStreamBridge {...player.stream} />}
+        {nowPlaying.isOpen && activeTrack && (
+          <NowPlaying
+            track={activeTrack}
+            clock={clock}
+            queue={queueTracks}
+            isPlaying={state.isPlaying}
+            isLoading={player.isStreamLoading}
+            liked={liked}
+            downloaded={downloadedSet.has(activeTrack.id)}
+            shuffleEnabled={state.shuffleEnabled}
+            repeatMode={state.repeatMode}
+            autoplayRadio={state.autoplayRadio}
+            playingFrom={state.playingFrom}
+            initialQueueOpen={queueFirst}
+            onClose={closeNowPlaying}
+          />
+        )}
 
-      <PlayerNotices notice={state.notice} waitingForNetwork={state.network.waiting && player.isLive} />
+        <Notices notice={state.notice} waitingForNetwork={state.network.waiting && activeTrack !== null} />
 
-      <NowPlayingBar
-        track={activeTrack}
-        clock={player.clock}
-        isPlaying={state.isPlaying}
-        isStreamLoading={player.isStreamLoading}
-        shuffleEnabled={state.shuffleEnabled}
-        repeatMode={state.repeatMode}
-        volume={player.audio.volume}
-        isMuted={player.audio.isMuted}
-        drawerTab={drawerTab}
-        onTogglePlay={actions.togglePlay}
-        onNext={actions.next}
-        onPrevious={actions.previous}
-        onSeek={actions.seekTo}
-        onToggleShuffle={actions.toggleShuffle}
-        onCycleRepeat={actions.cycleRepeat}
-        onVolumeChange={actions.setVolume}
-        onToggleMute={actions.toggleMute}
-        onOpenDrawerTab={openDrawerTab}
-      />
-    </div>
+        {/* Full-length YouTube stream (hidden unless the browser demands a tap to start) */}
+        {player.stream && <YouTubeStreamBridge {...player.stream} />}
+      </div>
+    </AppActionsContext.Provider>
   );
 }

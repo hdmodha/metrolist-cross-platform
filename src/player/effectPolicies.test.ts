@@ -11,7 +11,6 @@ import {
   isPositionSaveDue,
   pickAlternateUpload,
   planStreamErrorRecovery,
-  searchHistoryStep,
   shortcutForKey,
 } from './effectPolicies';
 
@@ -26,7 +25,7 @@ const yt = (name: string): InnerTubeParsedTrack => ({
 });
 
 function playingLive(): PlayerState {
-  return playerReducer(createInitialPlayerState([]), { type: 'playFromSearch', track: yt('a') });
+  return playerReducer(createInitialPlayerState(), { type: 'playFromSearch', track: yt('a') });
 }
 
 describe('stream error recovery', () => {
@@ -50,7 +49,7 @@ describe('stream error recovery', () => {
   });
 
   test('nothing to do without an active track', () => {
-    assert.equal(planStreamErrorRecovery(createInitialPlayerState([]), { code: 150, online: true }), null);
+    assert.equal(planStreamErrorRecovery(createInitialPlayerState(), { code: 150, online: true }), null);
   });
 });
 
@@ -99,61 +98,26 @@ describe('keyboard shortcuts', () => {
   });
 });
 
-describe('Back clears the search', () => {
-  test('entering search pushes one history entry, only once', () => {
-    let step = searchHistoryStep({ entryPushed: false }, { type: 'searchModeChanged', inSearch: true });
-    assert.deepEqual(step, { state: { entryPushed: true }, effect: 'push' });
-    step = searchHistoryStep(step.state, { type: 'searchModeChanged', inSearch: true });
-    assert.deepEqual(step, { state: { entryPushed: true }, effect: null });
-  });
-
-  test('Back while searching clears the search and does not navigate away', () => {
-    const step = searchHistoryStep({ entryPushed: true }, { type: 'popstate' });
-    assert.deepEqual(step, { state: { entryPushed: false }, effect: 'clearSearch' });
-    // The search box then empties: nothing else happens
-    assert.deepEqual(searchHistoryStep(step.state, { type: 'searchModeChanged', inSearch: false }), {
-      state: { entryPushed: false },
-      effect: null,
-    });
-  });
-
-  test('clearing the search in the UI removes our history entry again', () => {
-    assert.deepEqual(searchHistoryStep({ entryPushed: true }, { type: 'searchModeChanged', inSearch: false }), {
-      state: { entryPushed: false },
-      effect: 'back',
-    });
-  });
-
-  test('Back without a search is left to the browser / app shell (never trapped)', () => {
-    assert.deepEqual(searchHistoryStep({ entryPushed: false }, { type: 'popstate' }), {
-      state: { entryPushed: false },
-      effect: null,
-    });
-  });
-});
-
 describe('network: only a real failure or stall means "waiting for the network"', () => {
   const stall = (over: Partial<Parameters<typeof shouldWaitForNetworkAfterStall>[0]> = {}) => ({
     isPlaying: true,
-    isLive: true,
     streamStatus: 'buffering' as const,
     stalledForMs: STALL_BEFORE_WAITING_MS,
     online: false,
     ...over,
   });
 
-  test('a live stream stuck loading / buffering for 8 s while offline waits for the network', () => {
+  test('a stream stuck loading / buffering for 8 s while offline waits for the network', () => {
     assert.equal(STALL_BEFORE_WAITING_MS, 8000);
     assert.equal(shouldWaitForNetworkAfterStall(stall()), true);
     assert.equal(shouldWaitForNetworkAfterStall(stall({ streamStatus: 'loading' })), true);
   });
 
-  test('a short blip, a playing stream, an online device or a paused / local song never does', () => {
+  test('a short blip, a playing stream, an online device or a paused song never does', () => {
     assert.equal(shouldWaitForNetworkAfterStall(stall({ stalledForMs: 7999 })), false);
     assert.equal(shouldWaitForNetworkAfterStall(stall({ streamStatus: 'playing' })), false, 'still playing from its buffer');
     assert.equal(shouldWaitForNetworkAfterStall(stall({ online: true })), false);
     assert.equal(shouldWaitForNetworkAfterStall(stall({ isPlaying: false })), false);
-    assert.equal(shouldWaitForNetworkAfterStall(stall({ isLive: false })), false);
   });
 
   test('a retry never re-creates a stream that is playing', () => {

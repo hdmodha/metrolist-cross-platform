@@ -1,16 +1,12 @@
-import { expect, test, type MetrolistApp } from './fixtures/test';
-
-/** Autoplay Radio off: the queue holds exactly what the listener picked. */
-async function radioOff(app: MetrolistApp): Promise<void> {
-  await app.page.locator('button[aria-label="Autoplay Radio on"]').click();
-  await expect(app.page.locator('button[aria-label="Autoplay Radio off"]')).toBeVisible();
-}
+import { expect, test } from './fixtures/test';
+import { songs, v2Storage } from './fixtures/storage';
 
 test.describe('playback', () => {
   test('play, pause and seek control the stream', async ({ app }) => {
     await app.open();
     const title = await app.searchAndPlayFirst('coldplay yellow');
-    await expect(app.heroTitle).toHaveText(title);
+    await expect(app.currentTitle).toHaveText(title);
+    await app.showControls();
     await expect.poll(() => app.seekValue()).toBeGreaterThanOrEqual(1000);
 
     await app.pauseButton.click();
@@ -29,10 +25,12 @@ test.describe('playback', () => {
   test('blocked autoplay reveals a "tap to start" prompt and the progress never runs without audio', async ({ app }) => {
     await app.open({ yt: { blocked: true } });
     await app.search('kavinsky nightcall');
-    await app.resultCards().first().click();
+    await app.resultRows().first().click();
     const prompt = app.page.getByText('Tap the player below to start playback');
     await expect(prompt).toBeVisible({ timeout: 12_000 });
+    await app.showControls();
     expect(await app.seekValue()).toBe(0);
+    await expect(prompt, 'the prompt stays reachable above Now Playing').toBeVisible();
     await app.ytDo('userTap');
     await expect(prompt).toBeHidden();
     await expect.poll(() => app.ytState()).toBe(1);
@@ -52,10 +50,10 @@ test.describe('playback', () => {
     await expect.poll(async () => (await app.upcomingTitles()).length).toBeGreaterThanOrEqual(3);
     const [first, second] = await app.upcomingTitles();
     await app.ytDo('endSong');
-    await expect(app.heroTitle).toHaveText(first);
+    await expect(app.currentTitle).toHaveText(first);
     await expect.poll(() => app.ytState()).toBe(1);
     await app.ytDo('endSong');
-    await expect(app.heroTitle).toHaveText(second);
+    await expect(app.currentTitle).toHaveText(second);
   });
 
   test('Next and Previous move through the queue; Previous mid-song restarts it', async ({ app }) => {
@@ -64,44 +62,47 @@ test.describe('playback', () => {
     await app.openQueue();
     await expect.poll(async () => (await app.upcomingTitles()).length).toBeGreaterThanOrEqual(1);
     const [next] = await app.upcomingTitles();
+    await app.closeQueue();
+    await app.showControls();
     await app.nextButton.click();
-    await expect(app.heroTitle).toHaveText(next);
+    await expect(app.currentTitle).toHaveText(next);
     await app.previousButton.click();
-    await expect(app.heroTitle).toHaveText(song);
+    await expect(app.currentTitle).toHaveText(song);
     await expect.poll(() => app.ytState()).toBe(1);
     await app.ytDo('seekTo', '40');
     await expect.poll(() => app.seekValue()).toBeGreaterThan(39_000);
     await app.previousButton.click();
-    await expect(app.heroTitle).toHaveText(song);
+    await expect(app.currentTitle).toHaveText(song);
     await expect.poll(async () => (await app.yt())?.time ?? 99).toBeLessThan(3);
   });
 
   test('repeat off stops at the end of the queue, repeat all wraps, repeat one replays', async ({ app }) => {
-    await app.open();
-    await radioOff(app);
+    await app.open({ storage: v2Storage({ autoplayRadio: false }) });
     const song = await app.searchAndPlayFirst('nightcall');
-    await app.openQueue();
-    const repeat = app.drawer.getByRole('button', { name: /^Repeat/ });
+    await app.showControls();
+    const repeat = app.repeatButton;
 
-    await expect(repeat).toHaveText('Repeat off');
+    await expect(repeat).toHaveAttribute('aria-label', 'Repeat: off');
     await app.ytDo('endSong');
     await expect(app.playButton).toBeVisible();
-    await expect(app.heroTitle).toHaveText(song);
+    await expect(app.currentTitle).toHaveText(song);
 
     await app.playButton.click();
     await repeat.click();
-    await expect(repeat).toHaveText('Repeat all');
+    await expect(repeat).toHaveAttribute('aria-label', 'Repeat: all');
     await expect.poll(() => app.ytState()).toBe(1);
     await app.ytDo('endSong');
     await expect.poll(async () => (await app.yt())?.time ?? 99).toBeLessThan(5);
     await expect(app.pauseButton).toBeVisible();
 
     await repeat.click();
-    await expect(repeat).toHaveText('Repeat one');
+    await expect(repeat).toHaveAttribute('aria-label', 'Repeat: one');
     await app.ytDo('endSong');
     await expect.poll(async () => (await app.yt())?.time ?? 99).toBeLessThan(5);
-    await expect(app.heroTitle).toHaveText(song);
+    await expect(app.currentTitle).toHaveText(song);
     await expect.poll(() => app.ytState()).toBe(1);
+    await repeat.click();
+    await expect(repeat).toHaveAttribute('aria-label', 'Repeat: off');
   });
 
   test('shuffle never repeats the current song on Next and visits several songs', async ({ app }) => {
@@ -109,55 +110,60 @@ test.describe('playback', () => {
     await app.searchAndPlayFirst('daft punk');
     await app.openQueue();
     await expect.poll(async () => (await app.upcomingTitles()).length).toBeGreaterThanOrEqual(5);
-    await app.drawer.getByRole('button', { name: 'Shuffle' }).click();
+    await app.closeQueue();
+    await app.showControls();
+    await app.shuffleButton.click();
+    await expect(app.shuffleButton).toHaveAttribute('aria-pressed', 'true');
     const seen = new Set<string>();
-    let previous = await app.heroTitle.textContent();
+    let previous = await app.currentTitle.textContent();
     for (let i = 0; i < 4; i++) {
       await app.nextButton.click();
-      await expect(app.heroTitle).not.toHaveText(previous ?? '');
-      previous = await app.heroTitle.textContent();
+      await expect(app.currentTitle).not.toHaveText(previous ?? '');
+      previous = await app.currentTitle.textContent();
       seen.add(previous ?? '');
     }
     expect(seen.size).toBeGreaterThanOrEqual(2);
   });
 
-  test('library songs play, continue through the list and stop at the end of the queue', async ({ app }) => {
-    await app.open();
-    const broken = await app.page.evaluate(() =>
-      Array.from(document.images).filter((i) => i.complete && i.naturalWidth === 0 && i.src.includes(location.host)).map((i) => i.src)
-    );
-    expect(broken, 'built-in artwork loads').toEqual([]);
-    await radioOff(app);
-    const count = await app.libraryRows.count();
-    const last = (await app.libraryRows.nth(count - 1).locator('.font-semibold').textContent()) ?? '';
-    const beforeLast = (await app.libraryRows.nth(count - 2).locator('.font-semibold').textContent()) ?? '';
-    await app.libraryRows.nth(count - 2).click();
-    await expect(app.heroTitle).toHaveText(beforeLast);
-    await expect.poll(() => app.seekValue()).toBeGreaterThan(0);
+  test('list songs play, continue through the list and stop at the end of the queue', async ({ app }) => {
+    const liked = songs('three liked', 3);
+    await app.open({ storage: v2Storage({ liked, autoplayRadio: false }) });
+    await app.openCollection('Liked Songs');
+    await app.songButtons(app.main.getByRole('list', { name: 'Liked Songs' })).nth(1).click();
+    await expect.poll(() => app.ytState()).toBe(1);
+    await expect(app.currentTitle).toHaveText(liked[1].title);
+    // The playing row is highlighted
+    await expect(app.main.locator('button[aria-current="true"] .song-title')).toHaveText(liked[1].title);
+    await expect(app.main.locator('button[aria-current="true"]')).toHaveAttribute('aria-label', `Pause ${liked[1].title} by ${liked[1].artist}`);
 
-    const end = async () => app.seekBar.fill(String(Number(await app.seekBar.getAttribute('max')) - 2000)); // a multiple of the 1 s step
-    await end();
-    await expect(app.heroTitle).toHaveText(last);
-    await end();
+    await app.ytDo('endSong');
+    await expect(app.currentTitle).toHaveText(liked[2].title);
+    await expect.poll(() => app.ytState()).toBe(1);
+    await app.ytDo('endSong');
     await expect(app.playButton).toBeVisible();
-    await expect(app.heroTitle).toHaveText(last);
+    await expect(app.currentTitle).toHaveText(liked[2].title);
   });
 
-  test('Space toggles playback and the arrow keys seek by 5 seconds', async ({ app }) => {
-    await app.open();
-    await app.heroTitle.click();
-    await app.page.keyboard.press('Space');
+  test('Space toggles playback and the arrow keys seek by 5 seconds (never while typing)', async ({ app, page }) => {
+    const queue = songs('keyboard', 2);
+    await app.open({ storage: v2Storage({ queue, recent: queue }) });
+    await app.showControls();
+    await page.locator('[data-current-title]:visible').last().click({ force: true });
+    if (!app.isDesktop) await expect(app.nowPlaying, 'tapping the title keeps Now Playing open').toBeVisible();
+    await page.keyboard.press('Space');
     await expect(app.pauseButton).toBeVisible();
-    await app.page.keyboard.press('Space');
+    await page.keyboard.press('Space');
     await expect(app.playButton).toBeVisible();
     const before = await app.seekValue();
-    await app.page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
     await expect.poll(() => app.seekValue()).toBe(before + 5000);
-    await app.page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
     await expect.poll(() => app.seekValue()).toBe(before);
-    // Never while typing in the search box
+
+    await app.closeNowPlaying();
+    await app.goTo('Search');
     await app.searchInput.click();
-    await app.page.keyboard.press('Space');
+    await page.keyboard.press('Space');
     await expect(app.playButton).toBeVisible();
   });
 });

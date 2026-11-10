@@ -16,13 +16,18 @@ interface TrackMenuProps {
   className?: string;
 }
 
-/** Fixed app chrome (sticky header, now-playing bar) the menu must not slide under. */
-function readChromeInsets(): { top: number; bottom: number } {
-  const header = document.querySelector('[data-chrome="top"]');
-  const footer = document.querySelector('[data-chrome="bottom"]');
-  const top = header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
-  const bottom = footer ? Math.max(0, window.innerHeight - footer.getBoundingClientRect().top) : 0;
-  return { top, bottom };
+/**
+ * Fixed app chrome (tab bar + mini player, desktop player bar) the menu must not slide under. Inside
+ * the full-screen Now Playing dialog nothing covers the screen.
+ */
+function readChromeInsets(trigger: HTMLElement): { top: number; bottom: number } {
+  if (trigger.closest('[role="dialog"]')) return { top: 0, bottom: 0 };
+  let bottom = 0;
+  for (const el of document.querySelectorAll('[data-chrome="bottom"]')) {
+    const box = el.getBoundingClientRect();
+    if (box.height > 0) bottom = Math.max(bottom, window.innerHeight - box.top);
+  }
+  return { top: 0, bottom };
 }
 
 let menuCounter = 0;
@@ -30,8 +35,8 @@ let menuCounter = 0;
 /**
  * Per-track "More" menu (WAI-ARIA menu button): arrow keys / Home / End move between items,
  * Escape or a tap outside closes it, and focus returns to the trigger after a keyboard close or a
- * choice. Rendered in a portal with fixed positioning so cards, the bottom bar and the screen edges
- * never clip it.
+ * choice. Rendered in a portal with fixed positioning so cards, the bottom chrome and the screen
+ * edges never clip it.
  */
 export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, className = '' }: TrackMenuProps) {
   const [open, setOpen] = React.useState(false);
@@ -53,7 +58,7 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
     const menu = menuRef.current;
     if (!trigger || !menu) return false;
     const triggerBox = trigger.getBoundingClientRect();
-    const insets = readChromeInsets();
+    const insets = readChromeInsets(trigger);
     if (triggerBox.bottom < insets.top || triggerBox.top > window.innerHeight - insets.bottom) return false;
     const placed = placeMenu({
       trigger: triggerBox,
@@ -142,7 +147,7 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
         onKeyDown={onTriggerKeyDown}
         className={`tap-target inline-flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0 ${className}`}
       >
-        <EllipsisVertical className="w-4 h-4" />
+        <EllipsisVertical className="w-[18px] h-[18px]" />
       </button>
       {open &&
         createPortal(
@@ -158,7 +163,7 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
                 ? { top: position.top, left: position.left, maxHeight: position.maxHeight }
                 : { top: 0, left: 0, opacity: 0 }
             }
-            className="fixed z-[60] w-56 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-zinc-900 shadow-2xl py-1.5"
+            className="fixed z-[80] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-[#1f1f23] shadow-2xl shadow-black/60 py-1.5"
           >
             {items.map((item, idx) => (
               <button
@@ -173,7 +178,7 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
                   close(true);
                   item.onSelect();
                 }}
-                className="tap-target w-full flex items-center gap-3 px-3.5 py-2.5 text-left text-sm text-zinc-200 hover:bg-white/10 focus-visible:bg-white/10 cursor-pointer"
+                className="w-full min-h-11 flex items-center gap-3 px-4 py-2.5 text-left text-sm text-zinc-100 hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none cursor-pointer"
               >
                 <span className="text-zinc-400 shrink-0" aria-hidden="true">
                   {item.icon}

@@ -27,11 +27,12 @@ Thank you for contributing to **Metrolist**! This project provides a fast, ad-fr
 Before opening a Pull Request, please ensure all unit tests and TypeScript checks pass:
 
 ```bash
-# Run every unit test (player core, queue rules, InnerTube parsers, persistence, security)
+# Run every unit test (player core, queue rules, router, InnerTube parsers, persistence + migration, security)
 npm test
 
 # End-to-end browser tests (Playwright + Chromium; builds the app and starts its servers itself).
-# Hermetic: YouTube, the API and artwork are simulated, no internet needed.
+# Hermetic: YouTube, the API and artwork are simulated, no internet needed. Runs on phone,
+# small-phone, landscape-phone, tablet and desktop viewports.
 npx playwright install chromium   # once per machine
 npm run test:e2e
 
@@ -41,6 +42,12 @@ npm run lint
 # Verify production build
 npm run build
 ```
+
+### Writing code
+- Pure logic (player core, queue rules, router, persistence) is test-first: add the failing `node:test` test next to the module, then the code.
+- Keep components presentational and `React.memo`'d; side effects belong in `src/player/usePlayer.ts`.
+- Never put the playback position in React state (the e2e render proof checks it).
+- Changing the saved data shape? Bump the persistence version and add a migration test (see `src/utils/persistence.test.ts`).
 
 ---
 

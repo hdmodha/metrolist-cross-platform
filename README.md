@@ -17,13 +17,22 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 
 ## Key Features
 
-- **Full-Length Ad-Free Streaming**: Searches and streams full-length songs from YouTube Music (`WEB_REMIX`) with zero audio interruptions.
-- **YouTube Music Algorithmic Recommendations (`RDAMVM`)**: Automatically updates the **Recommended for You** shelf and **Up Next Radio Queue** using YouTube Music's official `youtubei/v1/next` recommendation engine whenever a song is played.
-- **5-Band Parametric Equalizer & Spectrum Analyzer**: Built-in Web Audio API BiquadFilter equalizer (`60 Hz` to `14 kHz`).
-- **Works Standalone on Phones**: The packaged Android / iOS app searches YouTube Music directly from the device — no server required.
-- **Real Queue Controls**: Play next, add to queue, reorder, clear, shuffle, repeat (all / one), and an endless Autoplay Radio that loads more songs whenever the queue runs low.
-- **Remembers You**: Liked songs, your library, the queue (resumed paused where you left off), volume and player preferences are saved on the device.
-- **Native OS Media Keys (`MediaSession API`)**: Integrates with macOS Control Center, Windows System Media Transport Controls, iOS Lock Screen, and Android Media Notifications.
+- **Simple, Spotify-style navigation**: Home, Search and Library tabs along the bottom on phones and tablets, a sidebar on desktop. Every page has a real address (`#/search?q=…`, `#/library/liked`, …), so links, reloads and the Back button just work.
+- **Home**: a greeting, your recently played songs, recommendations based on the last song you played ("Because you listened to …"; "Popular right now" on a fresh install) and artists to explore.
+- **Search**: live YouTube Music search as you type, recent searches, and a Browse grid of genres and moods.
+- **Library**: Liked Songs and Downloads (newest first, with Play and Shuffle) and your recently played songs.
+- **Mini player → Now Playing**: the playing song is docked above the tabs; tap it for a full-screen player with large artwork, seek bar, shuffle / repeat, the "⋮" menu and the Up next queue (reorder, remove, clear). Close it with the chevron, Escape, Back or a swipe down.
+- **Full-length, ad-free streaming** through YouTube Music, with **endless radio**: "Autoplay similar songs" keeps the music going with YouTube Music's own recommendations (`RDAMVM`) when your queue runs low, without ever dropping songs you queued.
+- **Downloads, honestly**: "Download" adds a song to your Downloads list; the audio is not stored on the device, so those songs still need an internet connection to play.
+- **Remembers you**: liked songs, downloads, history, recent searches, the queue (resumed paused where you left off), volume and preferences are saved on the device. Data from older versions is upgraded automatically.
+- **Native OS media keys (`MediaSession API`)**: macOS Control Center, Windows media controls, iOS Lock Screen and Android media notifications; Space / ← / → on desktop.
+
+## How It Works on Each Device
+
+- **Phones and tablets** (narrower than 1024 px): bottom tabs, a docked mini player, full-screen Now Playing with swipe-down to close. Landscape phones get a compact two-column Now Playing.
+- **Desktop and large windows** (1024 px and wider): a sidebar with shortcuts to Liked Songs and Downloads, and a full-width player bar with volume and a queue button.
+- **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages).
+- **Web / desktop bundles**: talk to the bundled Express server (`server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
 
 ---
 
@@ -33,7 +42,7 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 # Install dependencies
 npm install
 
-# Run all unit tests (player core, InnerTube, persistence & security checks)
+# Run all unit tests (player core, router, InnerTube, persistence & migration, security checks)
 npm test
 
 # End-to-end browser tests (Playwright + Chromium; builds the app and starts its servers itself).

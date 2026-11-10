@@ -1,17 +1,15 @@
 /**
  * The one hook that owns the player's side effects. All playback / queue behaviour lives in the pure
  * `playerReducer`; this hook only talks to the outside world (network, storage, the YouTube player,
- * the synth engine, OS media keys, timers) and turns what happens there into actions. Randomness
- * and time are injected here, so the reducer stays pure.
+ * OS media keys, timers) and turns what happens there into actions. Randomness and time are
+ * injected here, so the reducer stays pure.
  *
  * The playback position is NOT React state: it lives in a `PlaybackClock` that only the seek bar
- * subscribes to, so nothing else re-renders four times a second while music plays.
+ * bars subscribe to, so nothing else re-renders four times a second while music plays.
  */
 import React from 'react';
-import { INITIAL_TRACKS, type MetrolistTrack } from '../data/metrolistData';
 import { STATIC_YTM_FALLBACK } from '../data/fallbackTracks';
 import { fetchRadioContinuation, fetchRecommendations, searchTracks } from '../utils/apiClient';
-import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import {
   fromPersistedState,
   loadPlayerState,
@@ -19,7 +17,6 @@ import {
   toPersistedState,
   type PersistedAudioSettings,
 } from '../utils/persistence';
-import { sharedAudioEngine } from '../utils/webAudioSynth';
 import {
   KEYBOARD_SEEK_STEP_MS,
   STALL_BEFORE_WAITING_MS,
@@ -38,6 +35,7 @@ import {
   selectCanRetryRadio,
   selectIsStreamLoading,
   selectRadioContinuationRequest,
+  type PlaySource,
   type PlayerState,
   type StreamStatus,
   type TrackInput,
@@ -47,12 +45,11 @@ import { computeRetryDelayMs } from './retryPolicy';
 
 const NOTICE_DURATION_MS = 4500;
 const SAVE_DEBOUNCE_MS = 400;
-const SYNTH_TICK_MS = 250;
 const MEDIA_SEEK_STEP_MS = 10000;
 const MEDIA_POSITION_BUCKET_MS = 5000;
 const SEEK_END_MARGIN_MS = 500;
 
-/** Everything `YouTubeStreamBridge` needs for the active live track. */
+/** Everything `YouTubeStreamBridge` needs for the active track. */
 export interface StreamBinding {
   videoId: string;
   isPlaying: boolean;
@@ -81,8 +78,8 @@ interface Runtime {
 /** Restores the last session (always paused) from storage. */
 function bootRuntime(): Runtime {
   const persisted = loadPlayerState();
-  const { player, positionMs } = fromPersistedState(persisted, INITIAL_TRACKS);
-  let state: PlayerState = playerReducer(createInitialPlayerState(INITIAL_TRACKS), {
+  const { player, positionMs } = fromPersistedState(persisted);
+  let state: PlayerState = playerReducer(createInitialPlayerState(), {
     type: 'restore',
     snapshot: player,
     positionMs,
@@ -93,7 +90,7 @@ function bootRuntime(): Runtime {
   return {
     store: createPlayerStore(state),
     clock: createPlaybackClock(positionMs),
-    audio: { volume: persisted.volume, isMuted: persisted.isMuted, eqGains: persisted.eqGains },
+    audio: { volume: persisted.volume, isMuted: persisted.isMuted },
     positionMs,
   };
 }
@@ -117,14 +114,13 @@ export function usePlayer() {
   const audioRef = React.useRef(audio);
   audioRef.current = audio;
   const [isLoadingRecommendations, setIsLoadingRecommendations] = React.useState(false);
-  const [streamStart, setStreamStart] = React.useState({
+  const [streamStart, setStreamStart] = React.useState<{ nonce: number; positionMs: number; trackId: string | null }>({
     nonce: 0,
     positionMs: runtime.positionMs,
     trackId: state.activeTrackId,
   });
 
   const activeTrack = selectActiveTrack(state);
-  const isLive = !!activeTrack?.isLiveInnerTube;
 
   /* ------------------------------------- stable actions -------------------------------------- */
 
@@ -146,9 +142,14 @@ export function usePlayer() {
       send({ type: 'seekRequested', ms: clamped });
     };
     return {
-      playSearchResult: (track: InnerTubeParsedTrack) => send({ type: 'playFromSearch', track }),
-      playFromList: (track: MetrolistTrack, context: MetrolistTrack[]) =>
-        send({ type: 'playFromList', track, context }),
+      /** Plays one song now (search result, recommendation); the radio continues after it. */
+      playSearchResult: (track: TrackInput, source?: PlaySource) => send({ type: 'playFromSearch', track, source }),
+      /** Plays a song of a list, then continues through `context` (the list it was picked from). */
+      playFromList: (track: TrackInput, context: TrackInput[], source?: PlaySource) =>
+        send({ type: 'playFromList', track, context, source }),
+      /** Shuffle on, start at a random song of the list. */
+      shuffleList: (context: TrackInput[], source?: PlaySource) =>
+        send({ type: 'shuffleList', context, random: Math.random(), source }),
       playQueueItem: (trackId: string) => send({ type: 'playQueueItem', trackId }),
       togglePlay: () => send({ type: 'togglePlay' }),
       setPlaying: (playing: boolean) => send({ type: 'setPlaying', playing }),
@@ -175,13 +176,6 @@ export function usePlayer() {
           if (!nextMuted && a.volume === 0) return { ...a, volume: 0.5, isMuted: false };
           return { ...a, isMuted: nextMuted };
         }),
-      setEqGain: (band: number, gainDb: number) =>
-        setAudio((a) => {
-          const eqGains = [...a.eqGains];
-          eqGains[band] = gainDb;
-          return { ...a, eqGains };
-        }),
-      resetEq: () => setAudio((a) => ({ ...a, eqGains: a.eqGains.map(() => 0) })),
     };
   }, [clock, send, store]);
 
@@ -236,7 +230,8 @@ export function usePlayer() {
         if (durationMs && track) send({ type: 'durationDiscovered', trackId: track.id, durationMs });
       },
       onEnded: () => {
-        send({ type: 'trackEnded', trackId: store.getState().activeTrackId, random: Math.random() });
+        const trackId = store.getState().activeTrackId;
+        if (trackId) send({ type: 'trackEnded', trackId, random: Math.random() });
       },
       onError: (code: number) => {
         void recoverFromStreamError(code);
@@ -259,19 +254,15 @@ export function usePlayer() {
     if (previousTrackIdRef.current === state.activeTrackId) return;
     previousTrackIdRef.current = state.activeTrackId;
     clock.setPositionMs(0);
-    setStreamStart((prev) => (prev.trackId ? { ...prev, trackId: '', positionMs: 0 } : prev));
+    setStreamStart((prev) => (prev.trackId ? { ...prev, trackId: null, positionMs: 0 } : prev));
   }, [clock, state.activeTrackId]);
 
-  // Seeks (and restarts) move the clock at once; local songs have no stream to confirm them
+  // Seeks (and restarts) move the clock at once; the stream confirms them once applied
   const seekToken = state.seekRequest?.token;
   React.useEffect(() => {
     const request = store.getState().seekRequest;
-    if (!request) return;
-    clock.setPositionMs(request.ms);
-    if (!selectActiveTrack(store.getState())?.isLiveInnerTube) {
-      send({ type: 'seekHandled', token: request.token });
-    }
-  }, [clock, seekToken, send, store]);
+    if (request) clock.setPositionMs(request.ms);
+  }, [clock, seekToken, store]);
 
   /* ------------------------------ recommendations and radio --------------------------------- */
 
@@ -381,7 +372,7 @@ export function usePlayer() {
     return () => window.clearTimeout(timer);
   }, [networkWaiting, retryAttempt, retryNetworkNow]);
 
-  // A live stream stuck loading / buffering for 8 s while offline waits for the network. An
+  // A stream stuck loading / buffering for 8 s while offline waits for the network. An
   // `offline` event alone (a blip while the player plays from its buffer) changes nothing.
   const stalledSinceRef = React.useRef<number | null>(null);
   const checkStall = React.useCallback(() => {
@@ -390,7 +381,6 @@ export function usePlayer() {
     if (since === null || current.network.waiting) return;
     const wait = shouldWaitForNetworkAfterStall({
       isPlaying: current.isPlaying,
-      isLive: !!selectActiveTrack(current)?.isLiveInnerTube,
       streamStatus: current.streamStatus,
       stalledForMs: Date.now() - since,
       online: typeof navigator === 'undefined' || navigator.onLine !== false,
@@ -398,7 +388,7 @@ export function usePlayer() {
     if (wait) send({ type: 'networkLost' });
   }, [send, store]);
 
-  const isStalled = state.isPlaying && isLive && (state.streamStatus === 'loading' || state.streamStatus === 'buffering');
+  const isStalled = state.isPlaying && (state.streamStatus === 'loading' || state.streamStatus === 'buffering');
   React.useEffect(() => {
     if (!isStalled) {
       stalledSinceRef.current = null;
@@ -418,11 +408,6 @@ export function usePlayer() {
       window.removeEventListener('offline', checkStall);
     };
   }, [checkStall, retryNetworkNow]);
-
-  // Only a live stream can wait for the network
-  React.useEffect(() => {
-    if (networkWaiting && !isLive) send({ type: 'networkRestored' });
-  }, [isLive, networkWaiting, send]);
 
   /* --------------------------------------- persistence --------------------------------------- */
 
@@ -567,60 +552,10 @@ export function usePlayer() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [actions]);
 
-  /* --------------------------------- local synth engine -------------------------------------- */
-
-  // Browsers only allow audio after a user gesture: unlock the Web Audio context on the first one
-  React.useEffect(() => {
-    const unlock = () => sharedAudioEngine.unlock();
-    window.addEventListener('pointerdown', unlock, { passive: true });
-    window.addEventListener('keydown', unlock);
-    return () => {
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    sharedAudioEngine.setVolume(audio.isMuted ? 0 : audio.volume);
-  }, [audio.isMuted, audio.volume]);
-
-  React.useEffect(() => {
-    audio.eqGains.forEach((gain, band) => sharedAudioEngine.setEqBandGain(band, gain));
-  }, [audio.eqGains]);
-
-  const synthKey =
-    activeTrack && !isLive
-      ? `${activeTrack.id}|${activeTrack.rootFreqHz}|${activeTrack.bpm}|${activeTrack.chordIntervals.join(',')}`
-      : '';
-  React.useEffect(() => {
-    if (!state.isPlaying || !synthKey) {
-      sharedAudioEngine.stop();
-      return;
-    }
-    const track = selectActiveTrack(store.getState());
-    if (!track) return;
-    sharedAudioEngine.startTrack(track.rootFreqHz, track.chordIntervals, track.bpm, 1.0);
-    // Local songs are clocked here (live songs are clocked by the stream itself)
-    const timer = window.setInterval(() => {
-      const current = selectActiveTrack(store.getState());
-      if (!current) return;
-      const next = clock.getPositionMs() + SYNTH_TICK_MS;
-      if (next >= current.durationMs) {
-        send({ type: 'trackEnded', trackId: current.id, random: Math.random() });
-      } else {
-        clock.setPositionMs(next);
-      }
-    }, SYNTH_TICK_MS);
-    return () => {
-      window.clearInterval(timer);
-      sharedAudioEngine.stop();
-    };
-  }, [clock, send, state.isPlaying, store, synthKey]);
-
   /* ----------------------------------------- output ------------------------------------------ */
 
   const stream: StreamBinding | null =
-    activeTrack && isLive
+    activeTrack
       ? {
           videoId: activeTrack.videoId,
           isPlaying: state.isPlaying,
@@ -636,7 +571,6 @@ export function usePlayer() {
   return {
     state,
     activeTrack,
-    isLive,
     isStreamLoading: selectIsStreamLoading(state),
     isLoadingRecommendations,
     audio,
@@ -646,3 +580,4 @@ export function usePlayer() {
   };
 }
 
+export type PlayerActions = ReturnType<typeof usePlayer>['actions'];

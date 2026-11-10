@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
-/* Landscape phones: very little height between the sticky header and the fixed now-playing bar */
+/* Landscape phones: very little height between the page top and the docked player / tab bar */
 @custom-variant short (@media (max-height: 500px) and (orientation: landscape));
 
 @layer base {
@@ -29,7 +29,81 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Horizontal chip rows scroll without showing a scrollbar */
+html {
+  /* Prevents iOS Safari from inflating text after rotating the device */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: #09090b;
+}
+
+body {
+  /* No grey flash on tap in Android / iOS WebViews; no rubber-band scroll chaining */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* ------------------------------------------ app shell ------------------------------------------ */
+
+/*
+ * Heights of the fixed chrome, shared by the page padding, the toast position and the revealed
+ * YouTube player: tab bar (< 1024 px), docked mini player (< 1024 px, once something is loaded)
+ * and the desktop player bar (>= 1024 px, once something is loaded).
+ */
+.app-shell {
+  --nav-h: 3.5rem;
+  --mini-h: 0px;
+  --bar-h: 0px;
+  --chrome-bottom: calc(var(--nav-h) + var(--mini-h) + var(--bar-h) + env(safe-area-inset-bottom));
+}
+.app-shell[data-player='on'] {
+  --mini-h: 4rem;
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .app-shell {
+    --nav-h: 2.75rem;
+  }
+  .app-shell[data-player='on'] {
+    --mini-h: 3.5rem;
+  }
+}
+@media (min-width: 1024px) {
+  .app-shell,
+  .app-shell[data-player='on'] {
+    --nav-h: 0px;
+    --mini-h: 0px;
+  }
+  .app-shell[data-player='on'] {
+    --bar-h: 5.5rem;
+  }
+}
+
+/* Every page: side gutters clear of notches, bottom padding clear of the fixed chrome */
+.page {
+  --page-px: 1rem;
+  padding-left: max(var(--page-px), env(safe-area-inset-left));
+  padding-right: max(var(--page-px), env(safe-area-inset-right));
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+  padding-bottom: calc(var(--chrome-bottom) + 2rem);
+}
+@media (min-width: 640px) {
+  .page {
+    --page-px: 1.5rem;
+  }
+}
+@media (min-width: 1024px) {
+  .page {
+    --page-px: 2rem;
+    padding-top: 1.5rem;
+  }
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .page {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-bottom: calc(var(--chrome-bottom) + 1rem);
+  }
+}
+
+/* Horizontal shelves scroll without showing a scrollbar */
 .no-scrollbar {
   scrollbar-width: none;
 }
@@ -44,18 +118,6 @@
   appearance: none;
 }
 
-html {
-  /* Prevents iOS Safari from inflating text after rotating the device */
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
-}
-
-body {
-  /* No grey flash on tap in Android / iOS WebViews; no rubber-band scroll chaining */
-  -webkit-tap-highlight-color: transparent;
-  overscroll-behavior-y: none;
-}
-
 /* Keyboard focus is always visible (mouse / touch focus stays quiet) */
 :focus-visible {
   outline: 2px solid #34d399;
@@ -65,18 +127,139 @@ body {
   outline: none; /* the search box shows its own focus ring */
 }
 
-/* Primary controls get finger-sized hit areas on touch screens (min 40 x 40 px) */
+/* Long lists: rows outside the viewport are not laid out or painted */
+.song-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+/* ------------------------------------------- sliders ------------------------------------------- */
+
+/* Seek and volume sliders: a thin track filled up to `--fill`, a small thumb */
+.range {
+  --fill: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1rem;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--range-color, #fff) var(--fill), rgb(255 255 255 / 0.22) var(--fill));
+}
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--range-color, #fff) var(--fill), rgb(255 255 255 / 0.22) var(--fill));
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.5);
+}
+.range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: #fff;
+}
+.range:hover,
+.range:focus-visible {
+  --range-color: #34d399;
+}
+@media (pointer: coarse) {
+  .range {
+    height: 2.5rem;
+  }
+  .range::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+  }
+}
+
+/* ------------------------------------------ Now Playing ----------------------------------------- */
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.slide-up {
+  animation: sheet-up 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* The artwork is the largest square that fits the space left by the controls */
+.art-box {
+  container-type: size;
+}
+.art-square {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+}
+
+/* --------------------------------------- playing indicator -------------------------------------- */
+
+.playing-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.playing-bars > span {
+  width: 2.5px;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: bottom;
+  animation: playing-bar 0.95s ease-in-out infinite alternate;
+}
+.playing-bars > span:nth-child(1) {
+  transform: scaleY(0.55);
+  animation-delay: -0.45s;
+}
+.playing-bars > span:nth-child(2) {
+  transform: scaleY(0.95);
+  animation-delay: -0.2s;
+}
+.playing-bars > span:nth-child(3) {
+  transform: scaleY(0.7);
+  animation-delay: -0.7s;
+}
+@keyframes playing-bar {
+  from {
+    transform: scaleY(0.25);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.playing-bars.is-paused > span {
+  animation: none;
+}
+
+/* ------------------------------------------ touch sizes ----------------------------------------- */
+
+/* Controls get finger-sized hit areas on touch screens (min 40 x 40 px) */
 @media (pointer: coarse) {
   .tap-target {
     min-width: 40px;
     min-height: 40px;
   }
-}
-
-/* Long libraries: rows outside the viewport are not laid out or painted */
-.library-row {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 57px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -87,6 +270,12 @@ body {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+  .slide-up {
+    animation: none;
+  }
+  .playing-bars > span {
+    animation: none;
   }
   .animate-spin {
     /* A loading indicator must still read as "busy": slow it down instead of freezing it */

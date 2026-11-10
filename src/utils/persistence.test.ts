@@ -1,20 +1,27 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import type { MetrolistTrack } from '../data/metrolistData';
 import type { InnerTubeParsedTrack } from './metrolistCore';
 import {
   DEFAULT_PLAYER_STATE,
+  LEGACY_STORAGE_KEY,
   MAX_SAVED_QUEUE_TRACKS,
+  STORAGE_KEY,
   fromPersistedState,
   loadPlayerState,
+  migrateLegacyState,
   savePlayerState,
   toPersistedState,
   type KeyValueStorage,
   type PersistedPlayerState,
+  type PersistedTrack,
 } from './persistence';
-import { createInitialPlayerState, playerReducer, type PlayerAction, type PlayerState } from '../player/playerCore';
-
-const STORAGE_KEY = 'metrolist.player.v1';
+import {
+  MAX_RECENTLY_PLAYED,
+  createInitialPlayerState,
+  playerReducer,
+  type PlayerAction,
+  type PlayerState,
+} from '../player/playerCore';
 
 function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage & { data: Record<string, string> } {
   const data = { ...initial };
@@ -24,27 +31,11 @@ function memoryStorage(initial: Record<string, string> = {}): KeyValueStorage & 
     setItem: (key, value) => {
       data[key] = value;
     },
+    removeItem: (key) => {
+      delete data[key];
+    },
   };
 }
-
-function seed(n: number): MetrolistTrack {
-  return {
-    id: `trk-0${n}`,
-    videoId: `seed_${n}`,
-    title: `Seed ${n}`,
-    artist: 'Seed Artist',
-    album: 'Seed Album',
-    durationMs: 200000,
-    bpm: 100,
-    rootFreqHz: 220,
-    chordIntervals: [0, 3, 7],
-    coverUrl: 'seed.jpg',
-    genre: 'Ambient',
-    liked: false,
-    cachedOffline: false,
-  };
-}
-const SEEDS = [seed(1), seed(2), seed(3)];
 
 const vid = (name: string) => `vid${name}`.padEnd(11, '_');
 const yt = (name: string, durationMs = 180000): InnerTubeParsedTrack => ({
@@ -61,13 +52,15 @@ function run(state: PlayerState, ...actions: PlayerAction[]): PlayerState {
   return actions.reduce(playerReducer, state);
 }
 
-/** A realistic session: live songs, likes, hand-queued songs, an alternate upload and a radio. */
+/** A realistic session: likes, downloads, hand-queued songs, an alternate upload and a radio. */
 function session(): PlayerState {
   return run(
-    createInitialPlayerState(SEEDS, { shuffleEnabled: true, repeatMode: 'ALL', autoplayRadio: true }),
-    { type: 'playFromList', track: SEEDS[0], context: SEEDS },
-    { type: 'toggleLike', trackId: 'trk-02' },
-    { type: 'playFromSearch', track: yt('a') },
+    createInitialPlayerState({ shuffleEnabled: true, repeatMode: 'ALL', autoplayRadio: true }),
+    { type: 'playFromSearch', track: yt('z') },
+    { type: 'toggleLike', trackId: ytId('z') },
+    { type: 'toggleLike', trackId: ytId('n'), track: yt('n') },
+    { type: 'toggleDownloaded', trackId: ytId('d'), track: yt('d') },
+    { type: 'playFromSearch', track: yt('a'), source: 'search' },
     { type: 'toggleLike', trackId: ytId('a') },
     { type: 'alternateVideoFound', trackId: ytId('a'), videoId: vid('a2'), durationMs: 190000 },
     { type: 'addToQueue', track: yt('u1') },
@@ -94,69 +87,57 @@ describe('loadPlayerState / savePlayerState', () => {
       setItem: () => {
         throw new Error('QuotaExceededError');
       },
+      removeItem: () => {
+        throw new Error('SecurityError');
+      },
     };
     assert.deepEqual(loadPlayerState(throwing), DEFAULT_PLAYER_STATE);
-    assert.doesNotThrow(() => savePlayerState(DEFAULT_PLAYER_STATE, throwing));
+    assert.equal(savePlayerState(DEFAULT_PLAYER_STATE, throwing), false);
     // Under node there is no window: the default storage is simply absent
     assert.deepEqual(loadPlayerState(), DEFAULT_PLAYER_STATE);
-    assert.doesNotThrow(() => savePlayerState(DEFAULT_PLAYER_STATE));
+    assert.equal(savePlayerState(DEFAULT_PLAYER_STATE), false);
   });
 
-  test('old saved data without a queue still loads', () => {
-    const v1 = {
-      library: [
-        { videoId: vid('a'), title: 'Song a', artist: 'A', album: 'X', durationMs: 200000, coverUrl: 'c', liked: true, cachedOffline: false },
-      ],
-      seedFlags: { 'trk-01': { liked: true, cachedOffline: true } },
-      volume: 0.5,
-      isMuted: false,
-      shuffleEnabled: true,
-      repeatMode: 'ONE',
-      autoplayRadio: false,
-      eqGains: [0, 0, 0, 0, 0],
-    };
-    const loaded = loadPlayerState(memoryStorage({ [STORAGE_KEY]: JSON.stringify(v1) }));
-    assert.equal(loaded.library.length, 1);
-    assert.equal(loaded.volume, 0.5);
-    assert.equal(loaded.repeatMode, 'ONE');
-    assert.deepEqual(loaded.queue, []);
-    assert.equal(loaded.activeTrackId, '');
-    assert.equal(loaded.positionMs, 0);
-    assert.deepEqual(loaded.userQueuedIds, []);
-    assert.equal(loaded.radio, null);
-
-    const { player, positionMs } = fromPersistedState(loaded, SEEDS);
-    assert.deepEqual(player.queueIds, ['trk-01', 'trk-02', 'trk-03']);
-    assert.equal(player.activeTrackId, 'trk-01');
-    assert.equal(player.hasStartedPlayback, false);
-    assert.equal(positionMs, 0);
-    assert.deepEqual(player.libraryIds, [ytId('a'), 'trk-01', 'trk-02', 'trk-03']);
-    assert.equal(player.tracksById['trk-01'].liked, true);
-    assert.equal(player.tracksById['trk-01'].cachedOffline, true);
-    assert.equal(player.tracksById[ytId('a')].liked, true);
-    assert.equal(player.autoplayRadio, false);
-  });
-
-  test('wrong types in the new fields are ignored field by field', () => {
+  test('wrong types are ignored field by field', () => {
     const raw = {
+      version: 2,
       volume: 3,
-      queue: [
-        { id: ytId('a'), videoId: vid('a'), title: 'ok', artist: 'x' },
+      isMuted: 'yes',
+      repeatMode: 'SOMETIMES',
+      tracks: [
+        { id: ytId('a'), videoId: vid('a'), title: 'ok', artist: 'x', album: 5, durationMs: 'long', coverUrl: null },
         { id: 42, videoId: vid('b'), title: 'bad id', artist: 'x' },
+        { id: 'trk-01', videoId: 'seed_1', title: 'old demo', artist: 'x' },
+        { id: ytId('c'), videoId: '../etc', title: 'bad upload falls back to the id', artist: 'x' },
+        { id: ytId('e'), videoId: vid('e'), title: '', artist: 'x' },
         'garbage',
         { id: ytId('a'), videoId: vid('a'), title: 'duplicate', artist: 'x' },
       ],
+      likedIds: [ytId('a'), ytId('a'), 'ghost', 7, ytId('c')],
+      downloadedIds: 'nope',
+      recentlyPlayedIds: [ytId('c')],
+      queueIds: [ytId('a'), 'trk-01'],
+      userQueuedIds: [ytId('a'), 5, null],
       activeTrackId: 7,
       positionMs: 'soon',
-      userQueuedIds: [ytId('a'), 5, null],
+      playingFrom: 'mars',
       radio: { seedVideoId: '../etc/passwd', continuation: 'x' },
     };
     const loaded = loadPlayerState(memoryStorage({ [STORAGE_KEY]: JSON.stringify(raw) }));
     assert.equal(loaded.volume, DEFAULT_PLAYER_STATE.volume);
-    assert.deepEqual(loaded.queue?.map((t) => t.title), ['ok']);
-    assert.equal(loaded.activeTrackId, '');
-    assert.equal(loaded.positionMs, 0);
+    assert.equal(loaded.isMuted, false);
+    assert.equal(loaded.repeatMode, 'OFF');
+    assert.deepEqual(loaded.tracks.map((t) => t.title), ['ok', 'bad upload falls back to the id']);
+    assert.deepEqual(loaded.tracks[0], { id: ytId('a'), videoId: vid('a'), title: 'ok', artist: 'x', album: '', durationMs: 0, coverUrl: '' });
+    assert.equal(loaded.tracks[1].videoId, vid('c'));
+    assert.deepEqual(loaded.likedIds, [ytId('a'), ytId('c')]);
+    assert.deepEqual(loaded.downloadedIds, []);
+    assert.deepEqual(loaded.recentlyPlayedIds, [ytId('c')]);
+    assert.deepEqual(loaded.queueIds, [ytId('a')]);
     assert.deepEqual(loaded.userQueuedIds, [ytId('a')]);
+    assert.equal(loaded.activeTrackId, null);
+    assert.equal(loaded.positionMs, 0);
+    assert.equal(loaded.playingFrom, null);
     assert.equal(loaded.radio, null);
 
     const badToken = loadPlayerState(
@@ -165,9 +146,9 @@ describe('loadPlayerState / savePlayerState', () => {
     assert.deepEqual(badToken.radio, { seedVideoId: vid('a'), continuation: null });
   });
 
-  test('save caps the queue and the library', () => {
+  test('save caps the queue and recently played', () => {
     const storage = memoryStorage();
-    const queue = Array.from({ length: 250 }, (_, i) => ({
+    const tracks: PersistedTrack[] = Array.from({ length: 250 }, (_, i) => ({
       id: `ytm-${`q${i}`.padEnd(11, '_')}`,
       videoId: `q${i}`.padEnd(11, '_'),
       title: `Q${i}`,
@@ -175,13 +156,12 @@ describe('loadPlayerState / savePlayerState', () => {
       album: '',
       durationMs: 200000,
       coverUrl: '',
-      liked: false,
-      cachedOffline: false,
     }));
-    savePlayerState({ ...DEFAULT_PLAYER_STATE, queue }, storage);
-    const saved = JSON.parse(storage.data[STORAGE_KEY]) as PersistedPlayerState;
-    assert.equal(saved.queue?.length, MAX_SAVED_QUEUE_TRACKS);
-    assert.equal(loadPlayerState(storage).queue?.length, MAX_SAVED_QUEUE_TRACKS);
+    const ids = tracks.map((t) => t.id);
+    assert.equal(savePlayerState({ ...DEFAULT_PLAYER_STATE, tracks, queueIds: ids, recentlyPlayedIds: ids }, storage), true);
+    const loaded = loadPlayerState(storage);
+    assert.equal(loaded.queueIds.length, MAX_SAVED_QUEUE_TRACKS);
+    assert.equal(loaded.recentlyPlayedIds.length, MAX_RECENTLY_PLAYED);
   });
 });
 
@@ -189,104 +169,226 @@ describe('toPersistedState / fromPersistedState', () => {
   test('a session survives a save / load round trip, paused, at the saved position', () => {
     const before = session();
     const storage = memoryStorage();
-    savePlayerState(toPersistedState(before, 61000, { volume: 0.4, isMuted: true, eqGains: [1, 2, 3, 4, 5] }), storage);
+    savePlayerState(toPersistedState(before, 61000, { volume: 0.4, isMuted: true }), storage);
+    const saved = JSON.parse(storage.data[STORAGE_KEY]) as PersistedPlayerState;
+    assert.equal(saved.version, 2);
     const loaded = loadPlayerState(storage);
     assert.equal(loaded.volume, 0.4);
     assert.equal(loaded.isMuted, true);
-    assert.deepEqual(loaded.eqGains, [1, 2, 3, 4, 5]);
 
-    const { player, positionMs } = fromPersistedState(loaded, SEEDS);
+    const { player, positionMs } = fromPersistedState(loaded);
     assert.equal(positionMs, 61000);
     assert.deepEqual(player.queueIds, before.queueIds);
     assert.equal(player.activeTrackId, before.activeTrackId);
     assert.deepEqual(player.userQueuedIds, before.userQueuedIds);
-    assert.deepEqual(player.libraryIds, before.libraryIds);
+    assert.deepEqual(player.likedIds, [ytId('a'), ytId('n'), ytId('z')]);
+    assert.deepEqual(player.downloadedIds, [ytId('d')]);
+    assert.deepEqual(player.recentlyPlayedIds, [ytId('a'), ytId('z')]);
+    assert.equal(player.playingFrom, 'search');
     assert.deepEqual(player.radio, { seedVideoId: vid('a'), continuation: 'TOKEN%3D', status: 'idle', failedAttempts: 0 });
     assert.equal(player.shuffleEnabled, true);
     assert.equal(player.repeatMode, 'ALL');
     assert.equal(player.isPlaying, false);
     assert.equal(player.streamStatus, 'paused');
-    assert.equal(player.hasStartedPlayback, true);
+    assert.deepEqual(Object.keys(player.tracksById).sort(), Object.keys(before.tracksById).sort());
+    // The working alternate upload is kept; ids never change; metadata survives
+    for (const [id, was] of Object.entries(before.tracksById)) assert.deepEqual(player.tracksById[id], was, id);
+    assert.equal(player.tracksById[ytId('a')].videoId, vid('a2'));
 
-    // The working alternate upload and the likes are kept; ids never change
-    const a = player.tracksById[ytId('a')];
-    assert.equal(a.videoId, vid('a2'));
-    assert.equal(a.durationMs, 190000);
-    assert.equal(a.liked, true);
-    assert.equal(player.tracksById['trk-02'].liked, true);
-    for (const id of before.queueIds) {
-      const was = before.tracksById[id];
-      const now = player.tracksById[id];
-      assert.equal(now.title, was.title, id);
-      assert.equal(now.artist, was.artist, id);
-      assert.equal(now.album, was.album, id);
-      assert.equal(now.durationMs, was.durationMs, id);
-      assert.equal(now.coverUrl, was.coverUrl, id);
-      assert.equal(!!now.isLiveInnerTube, !!was.isLiveInnerTube, id);
-    }
     // Feeding it to the reducer resumes at the saved position
-    const resumed = playerReducer(createInitialPlayerState(SEEDS), { type: 'restore', snapshot: player, positionMs });
+    const resumed = playerReducer(createInitialPlayerState(), { type: 'restore', snapshot: player, positionMs });
     assert.equal(resumed.seekRequest?.ms, 61000);
     assert.equal(resumed.isPlaying, false);
+    assert.deepEqual(resumed.likedIds, player.likedIds);
   });
 
   test('unknown ids are dropped and an active song outside the queue falls back to the first one', () => {
+    const track = (name: string): PersistedTrack => ({ id: ytId(name), videoId: vid(name), title: `Song ${name}`, artist: 'A', album: '', durationMs: 200000, coverUrl: '' });
     const persisted: PersistedPlayerState = {
       ...DEFAULT_PLAYER_STATE,
-      queue: [
-        { id: 'trk-99', videoId: 'x', title: 'gone seed', artist: '', album: '', durationMs: 1, coverUrl: '', liked: false, cachedOffline: false },
-        { id: 'trk-02', videoId: 'seed_2', title: 'Seed 2', artist: '', album: '', durationMs: 1, coverUrl: '', liked: false, cachedOffline: false },
-        { id: 'ytm-bad', videoId: 'bad', title: 'bad live id', artist: '', album: '', durationMs: 1, coverUrl: '', liked: false, cachedOffline: false },
-        { id: ytId('b'), videoId: vid('b'), title: 'Song b', artist: 'B', album: '', durationMs: 200000, coverUrl: '', liked: false, cachedOffline: false },
-      ],
-      activeTrackId: 'trk-99',
+      tracks: [track('a'), track('b')],
+      queueIds: ['ghost', ytId('a'), ytId('b')],
+      activeTrackId: 'ghost',
       positionMs: 50000,
-      userQueuedIds: ['trk-02', ytId('b'), 'trk-99'],
+      userQueuedIds: [ytId('a'), ytId('b'), 'ghost'],
     };
-    const { player, positionMs } = fromPersistedState(persisted, SEEDS);
-    assert.deepEqual(player.queueIds, ['trk-02', ytId('b')]);
-    assert.equal(player.activeTrackId, 'trk-02');
+    const { player, positionMs } = fromPersistedState(persisted);
+    assert.deepEqual(player.queueIds, [ytId('a'), ytId('b')]);
+    assert.equal(player.activeTrackId, ytId('a'));
     assert.equal(positionMs, 0, 'the position belonged to another song');
     assert.deepEqual(player.userQueuedIds, [ytId('b')]);
-    // Seed metadata always comes from the app, not from storage
-    assert.equal(player.tracksById['trk-02'].durationMs, 200000);
   });
 
-  test('a position beyond the song falls back to the start; an all-unknown queue to the seeds', () => {
+  test('a position beyond the song falls back to the start; an empty queue to nothing active', () => {
     const persisted: PersistedPlayerState = {
       ...DEFAULT_PLAYER_STATE,
-      queue: [{ id: 'trk-01', videoId: 'seed_1', title: 'Seed 1', artist: '', album: '', durationMs: 1, coverUrl: '', liked: false, cachedOffline: false }],
-      activeTrackId: 'trk-01',
+      tracks: [{ id: ytId('a'), videoId: vid('a'), title: 'A', artist: '', album: '', durationMs: 200000, coverUrl: '' }],
+      queueIds: [ytId('a')],
+      activeTrackId: ytId('a'),
       positionMs: 999999,
+      likedIds: [ytId('a')],
     };
-    assert.equal(fromPersistedState(persisted, SEEDS).positionMs, 0);
-    assert.equal(fromPersistedState({ ...persisted, positionMs: -5 }, SEEDS).positionMs, 0);
+    assert.equal(fromPersistedState(persisted).positionMs, 0);
+    assert.equal(fromPersistedState({ ...persisted, positionMs: -5 }).positionMs, 0);
+    assert.equal(fromPersistedState({ ...persisted, positionMs: 12000 }).positionMs, 12000);
 
-    const { player } = fromPersistedState({ ...persisted, queue: [], activeTrackId: 'trk-01' }, SEEDS);
-    assert.deepEqual(player.queueIds, ['trk-01', 'trk-02', 'trk-03']);
-    assert.equal(player.hasStartedPlayback, false);
+    const { player, positionMs } = fromPersistedState({ ...persisted, queueIds: [], positionMs: 12000 });
+    assert.equal(player.activeTrackId, null);
+    assert.deepEqual(player.queueIds, []);
+    assert.deepEqual(player.likedIds, [ytId('a')], 'the library survives without a queue');
+    assert.equal(positionMs, 0);
   });
 
-  test('a player that never played saves no queue, so a reload starts fresh', () => {
-    const untouched = run(createInitialPlayerState(SEEDS), { type: 'toggleShuffle' });
+  test('a fresh player saves an empty library, and loads back as a fresh install', () => {
+    const untouched = run(createInitialPlayerState(), { type: 'toggleShuffle' });
     const persisted = toPersistedState(untouched, 0);
-    assert.deepEqual(persisted.queue, []);
-    const { player } = fromPersistedState(persisted, SEEDS);
-    assert.equal(player.hasStartedPlayback, false);
+    assert.deepEqual(persisted.tracks, []);
+    assert.equal(persisted.activeTrackId, null);
+    const { player } = fromPersistedState(persisted);
+    assert.equal(player.activeTrackId, null);
     assert.equal(player.shuffleEnabled, true);
   });
 
   test('a long queue is saved as a 200-song window that keeps the playing song', () => {
     const many = Array.from({ length: 260 }, (_, i) => yt(`m${i}`));
-    let state = createInitialPlayerState(SEEDS);
-    state = run(state, { type: 'playFromSearch', track: many[0] });
+    let state = run(createInitialPlayerState(), { type: 'playFromSearch', track: many[0] });
     for (const t of many.slice(1)) state = run(state, { type: 'addToQueue', track: t });
     state = run(state, { type: 'playQueueItem', trackId: ytId('m240') });
     const persisted = toPersistedState(state, 0);
-    assert.equal(persisted.queue?.length, MAX_SAVED_QUEUE_TRACKS);
-    assert.ok(persisted.queue?.some((t) => t.id === ytId('m240')));
-    assert.ok(persisted.queue?.some((t) => t.id === ytId('m259')));
-    const { player } = fromPersistedState(persisted, SEEDS);
+    assert.equal(persisted.queueIds.length, MAX_SAVED_QUEUE_TRACKS);
+    assert.ok(persisted.queueIds.includes(ytId('m240')));
+    assert.ok(persisted.queueIds.includes(ytId('m259')));
+    const { player } = fromPersistedState(persisted);
     assert.equal(player.activeTrackId, ytId('m240'));
+    // Only songs some saved list refers to are stored
+    const savedIds = new Set(persisted.tracks.map((t) => t.id));
+    assert.equal(savedIds.size, persisted.tracks.length);
+    assert.ok(!savedIds.has(ytId('m1')), 'a song cut from the saved queue window is not stored');
+  });
+});
+
+/* ----------------------------------------- v1 → v2 ----------------------------------------- */
+
+/** Data exactly as version 1 of the app saved it (with its built-in demo songs). */
+function v1Data() {
+  const snap = (name: string, flags: { liked?: boolean; cachedOffline?: boolean } = {}) => ({
+    videoId: vid(name),
+    title: `Song ${name}`,
+    artist: `Artist ${name}`,
+    album: `Album ${name}`,
+    durationMs: 200000,
+    coverUrl: `https://img/${name}.jpg`,
+    liked: !!flags.liked,
+    cachedOffline: !!flags.cachedOffline,
+  });
+  return {
+    library: [snap('a', { liked: true }), snap('b', { cachedOffline: true }), snap('c', { liked: true, cachedOffline: true }), snap('d')],
+    seedFlags: { 'trk-01': { liked: true, cachedOffline: true }, 'trk-04': { liked: true, cachedOffline: false } },
+    volume: 0.5,
+    isMuted: true,
+    shuffleEnabled: true,
+    repeatMode: 'ONE',
+    autoplayRadio: false,
+    eqGains: [2, 1, 0, 1, 3],
+    queue: [
+      { ...snap('d'), id: ytId('d') },
+      { id: 'trk-02', videoId: 'ytm_TR_4412b', title: 'Shinjuku Raindrop Protocol', artist: 'Kaito', album: '', durationMs: 194000, coverUrl: '/assets/x.jpg', liked: true, cachedOffline: true },
+      { ...snap('a', { liked: true }), id: ytId('a'), videoId: vid('a2'), durationMs: 210000 },
+      { ...snap('e'), id: ytId('e') },
+    ],
+    activeTrackId: ytId('a'),
+    positionMs: 42000,
+    userQueuedIds: [ytId('e'), 'trk-02'],
+    radio: { seedVideoId: vid('a'), continuation: 'TOKEN1' },
+  };
+}
+
+describe('migration from version 1', () => {
+  test('liked and downloaded songs keep their order; demo songs, their flags and the EQ are dropped', () => {
+    const migrated = migrateLegacyState(v1Data());
+    assert.equal(migrated.version, 2);
+    assert.deepEqual(migrated.likedIds, [ytId('a'), ytId('c')]);
+    assert.deepEqual(migrated.downloadedIds, [ytId('b'), ytId('c')]);
+    assert.deepEqual(migrated.recentlyPlayedIds, [ytId('a'), ytId('b'), ytId('c'), ytId('d')], 'the old library becomes the history');
+    assert.ok(!migrated.tracks.some((t) => !t.id.startsWith('ytm-')), 'no demo song survives');
+    assert.ok(!('eqGains' in migrated));
+    assert.ok(!('seedFlags' in migrated));
+    // Queue without the demo song; the working upload of "a" is kept
+    assert.deepEqual(migrated.queueIds, [ytId('d'), ytId('a'), ytId('e')]);
+    assert.equal(migrated.activeTrackId, ytId('a'));
+    assert.equal(migrated.positionMs, 42000);
+    assert.deepEqual(migrated.userQueuedIds, [ytId('e')]);
+    const a = migrated.tracks.find((t) => t.id === ytId('a'));
+    assert.equal(a?.videoId, vid('a2'));
+    assert.equal(a?.durationMs, 210000);
+    assert.deepEqual(migrated.radio, { seedVideoId: vid('a'), continuation: 'TOKEN1' });
+    assert.equal(migrated.volume, 0.5);
+    assert.equal(migrated.isMuted, true);
+    assert.equal(migrated.shuffleEnabled, true);
+    assert.equal(migrated.repeatMode, 'ONE');
+    assert.equal(migrated.autoplayRadio, false);
+    assert.equal(migrated.playingFrom, null);
+
+    const { player, positionMs } = fromPersistedState(migrated);
+    assert.equal(player.activeTrackId, ytId('a'));
+    assert.equal(positionMs, 42000);
+    assert.equal(player.tracksById[ytId('c')].title, 'Song c');
+  });
+
+  test('a demo song that was playing becomes "nothing active"', () => {
+    const migrated = migrateLegacyState({ ...v1Data(), activeTrackId: 'trk-02' });
+    assert.equal(migrated.activeTrackId, null);
+    assert.deepEqual(migrated.queueIds, []);
+    assert.equal(migrated.positionMs, 0);
+    assert.deepEqual(migrated.userQueuedIds, []);
+    assert.equal(migrated.radio, null);
+    assert.deepEqual(migrated.likedIds, [ytId('a'), ytId('c')], 'the library survives');
+    const { player } = fromPersistedState(migrated);
+    assert.equal(player.activeTrackId, null);
+  });
+
+  test('old data without a queue and garbage both migrate safely', () => {
+    const noQueue = migrateLegacyState({ library: v1Data().library, volume: 0.3 });
+    assert.equal(noQueue.activeTrackId, null);
+    assert.deepEqual(noQueue.queueIds, []);
+    assert.equal(noQueue.volume, 0.3);
+    assert.deepEqual(noQueue.likedIds, [ytId('a'), ytId('c')]);
+    assert.deepEqual(migrateLegacyState('nonsense'), DEFAULT_PLAYER_STATE);
+    assert.deepEqual(migrateLegacyState({ library: [{ videoId: 'short', title: 'x', artist: 'y', liked: true }] }), DEFAULT_PLAYER_STATE);
+  });
+
+  test('loading migrates the v1 key once, stores v2 and removes v1', () => {
+    const storage = memoryStorage({ [LEGACY_STORAGE_KEY]: JSON.stringify(v1Data()) });
+    const loaded = loadPlayerState(storage);
+    assert.deepEqual(loaded.likedIds, [ytId('a'), ytId('c')]);
+    assert.ok(storage.data[STORAGE_KEY], 'v2 is written');
+    assert.equal(storage.data[LEGACY_STORAGE_KEY], undefined, 'v1 is removed');
+    assert.deepEqual(loadPlayerState(storage), loaded, 'the next launch reads v2');
+  });
+
+  test('v2 wins over leftover v1 data; a corrupt v1 is left alone', () => {
+    const v2 = toPersistedState(run(createInitialPlayerState(), { type: 'toggleLike', trackId: ytId('x'), track: yt('x') }), 0);
+    const both = memoryStorage({ [STORAGE_KEY]: JSON.stringify(v2), [LEGACY_STORAGE_KEY]: JSON.stringify(v1Data()) });
+    assert.deepEqual(loadPlayerState(both).likedIds, [ytId('x')]);
+
+    const corrupt = memoryStorage({ [LEGACY_STORAGE_KEY]: '{oops' });
+    assert.deepEqual(loadPlayerState(corrupt), DEFAULT_PLAYER_STATE);
+    assert.equal(corrupt.data[LEGACY_STORAGE_KEY], '{oops');
+    assert.equal(corrupt.data[STORAGE_KEY], undefined);
+  });
+
+  test('when v2 cannot be written the v1 data is kept for the next launch', () => {
+    const data: Record<string, string> = { [LEGACY_STORAGE_KEY]: JSON.stringify(v1Data()) };
+    const readOnly: KeyValueStorage = {
+      getItem: (key) => data[key] ?? null,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+      removeItem: (key) => {
+        delete data[key];
+      },
+    };
+    assert.deepEqual(loadPlayerState(readOnly).likedIds, [ytId('a'), ytId('c')]);
+    assert.ok(data[LEGACY_STORAGE_KEY], 'v1 is not removed');
   });
 });
