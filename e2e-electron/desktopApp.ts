@@ -18,7 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { createMockApi, installRoutes, type MockApi } from '../e2e/fixtures/test';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const APP_URL = 'http://127.0.0.1:47823/';
+/** The page origin (a host name: YouTube refuses some videos for an IP-address host). */
+export const APP_URL = 'http://localhost:47823/';
+/** Where versions up to 1.1.0 kept their saved data (moved once at start-up). */
+export const LEGACY_URL = 'http://127.0.0.1:47823/';
 /** Path of the Electron binary (`require('electron')` from Node is the path). */
 export const ELECTRON_BINARY = createRequire(import.meta.url)('electron') as string;
 
@@ -62,7 +65,18 @@ export async function launchDesktopApp(userDataDir: string): Promise<DesktopApp>
   const electronApp = await electron.launch({ args: electronArgs(userDataDir), cwd: ROOT, env: electronEnv() });
   const api = createMockApi();
   const unexpected: string[] = [];
-  const page = await electronApp.firstWindow();
+  // The first windows can be the hidden ones of the one-time data move (`electron/storageMigration.ts`)
+  let page: Page | undefined;
+  await expect
+    .poll(
+      () => {
+        page = electronApp.windows().find((p) => p.url().startsWith(APP_URL) && !p.url().includes('manifest'));
+        return page !== undefined;
+      },
+      { timeout: 20000 }
+    )
+    .toBe(true);
+  if (!page) throw new Error('The main window did not open');
   // Page-level routes: in Electron, context-level routes do not reach a window that already exists
   await installRoutes(page, api, unexpected);
   await page.waitForLoadState('domcontentloaded');

@@ -76,6 +76,37 @@ async function start(overrides: Partial<MetrolistServerOptions> & Pick<Metrolist
   });
 }
 
+describe('desktop mode: saved data of the old origin', () => {
+  test('is handed out once, to the localhost page only, never cached; web mode has no such route', async () => {
+    let pending: Record<string, string> | null = { 'metrolist.player.v2': '{"v":2}' };
+    const take = () => {
+      const out = pending;
+      pending = null;
+      return out;
+    };
+    const desktop = await start({ mode: 'desktop', takeLegacyStorage: take });
+    try {
+      const wrongHost = await request(desktop.port, '/api/desktop/legacy-storage');
+      assert.equal(wrongHost.status, 404);
+      const first = await request(desktop.port, '/api/desktop/legacy-storage', { host: `localhost:${desktop.port}` });
+      assert.equal(first.status, 200);
+      assert.equal(first.headers['cache-control'], 'no-store');
+      assert.deepEqual(JSON.parse(first.body), { entries: { 'metrolist.player.v2': '{"v":2}' } });
+      const second = await request(desktop.port, '/api/desktop/legacy-storage', { host: `localhost:${desktop.port}` });
+      assert.deepEqual(JSON.parse(second.body), { entries: {} });
+    } finally {
+      await desktop.close();
+    }
+    const web = await start({ mode: 'web', takeLegacyStorage: () => ({ 'metrolist.a': 'b' }) });
+    try {
+      const reply = await request(web.port, '/api/desktop/legacy-storage', { host: `localhost:${web.port}` });
+      assert.doesNotMatch(reply.body, /metrolist\.a/);
+    } finally {
+      await web.close();
+    }
+  });
+});
+
 describe('desktop mode', () => {
   let server: RunningMetrolistServer;
   before(async () => {
