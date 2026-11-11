@@ -115,7 +115,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   ├── fixtures/                          # test.ts (hermetic routes + MetrolistApp driver), fakeYouTube.ts, apiFixtures.ts, storage.ts (seeded saved data), ports.ts
 │   └── *.spec.ts                          # search, navigation, nowplaying, library, playback, queue, resilience, persistence, performance, native (no backend), layout
 └── .github/workflows/
-    ├── deploy-pages.yml                   # CI: unit tests, typecheck, build, Playwright e2e (report artifact on failure)
+    ├── deploy-pages.yml                   # CI on pull requests into main only (not again on the merge push): unit tests, typecheck, build, Playwright e2e, Electron suite
     └── release-native-builds.yml          # Multi-OS release pipeline (Android APK, iOS, macOS, Windows, Web)
 ```
 

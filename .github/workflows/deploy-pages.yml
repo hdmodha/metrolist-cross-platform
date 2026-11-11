@@ -1,14 +1,21 @@
 name: CI Build & Test
 
+# Runs once per change: on the pull request into main (GitHub tests the PR merged onto main, i.e. the
+# tree main will have after the merge). It no longer re-runs on the push that merging creates: that was
+# the same code tested twice. Protect main (Settings → Branches: require "build-and-test" to pass and the
+# branch to be up to date before merging) so nothing reaches main untested. Manual runs stay possible.
 on:
-  push:
-    branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push to the same pull request cancels the run that is still testing the older commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
