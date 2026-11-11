@@ -4,14 +4,25 @@ A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, And
 
 ---
 
-## Download Stable Builds
+## Download and install
 
-Users can download the latest stable builds directly from the **[GitHub Releases](../../releases)** page:
+Download the latest builds from the **[GitHub Releases](../../releases)** page:
 - **Android**: `metrolist-android-universal.apk` (install directly on any Android device)
 - **iOS / iPadOS**: `metrolist-ios-xcode-project.zip` (sideload via Xcode / AltStore, or install as an iOS Home Screen Web App)
-- **macOS**: `metrolist-macos-universal-standalone.zip`
-- **Windows**: `metrolist-windows-x64-standalone.zip`
-- **Portable Web & Server**: `metrolist-portable-web-and-server.zip`
+- **Portable Web & Server** (any OS with [Node.js](https://nodejs.org) 20.19 or newer): `metrolist-portable-web-and-server.zip`. Unzip it, open a terminal in the folder and run `npm start` (or `node dist-server/server.mjs`), then open http://localhost:3000. No `npm install` is needed: the server is a single bundled file. Set `PORT` to use another port.
+- **macOS / Windows**: native apps (a `.dmg` with `Metrolist.app`, a Windows installer) are being prepared; see [Desktop app](#desktop-app) below. Until they ship, `metrolist-macos-universal-standalone.zip` / `metrolist-windows-x64-standalone.zip` contain the same portable web & server as above and need Node.js.
+
+### Desktop app
+
+The desktop app is an Electron wrapper around the same app, with the server running inside it on `127.0.0.1` (port 47823). It needs no Node.js, terminal or browser once packaged. Until the installers are published, contributors can run it from source (see [CONTRIBUTING.md](./CONTRIBUTING.md)):
+
+```bash
+npm install
+npm run build && npm run build:electron
+npx electron .
+```
+
+Where your data lives: liked songs, downloads, history, the queue and preferences are stored by the app's web storage in its user-data folder (macOS `~/Library/Application Support/Metrolist`, Windows `%APPDATA%\Metrolist`, Linux `~/.config/Metrolist`), together with the window size and position. The data belongs to the address `http://127.0.0.1:47823`; if another program holds that port, Metrolist starts on a fallback port and tells you that your saved music is not shown in that session.
 
 ---
 
@@ -32,7 +43,8 @@ Users can download the latest stable builds directly from the **[GitHub Releases
 - **Phones and tablets** (narrower than 1024 px): bottom tabs, a docked mini player, full-screen Now Playing with swipe-down to close. Landscape phones get a compact two-column Now Playing.
 - **Desktop and large windows** (1024 px and wider): a sidebar with shortcuts to Liked Songs and Downloads, and a full-width player bar with volume and a queue button.
 - **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages).
-- **Web / desktop bundles**: talk to the bundled Express server (`server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
+- **Desktop app (Electron)**: the same app in its own window; the server runs inside the app on `127.0.0.1` only. Closing the window on macOS keeps the music playing (Cmd+Q quits); media keys work through the OS media controls.
+- **Web / portable bundle**: talk to the bundled Express server (`dist-server/server.mjs`, built from `server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
 
 ---
 
@@ -53,11 +65,11 @@ npm run test:e2e
 # Start development server (Express + Vite on http://localhost:3000)
 npm run dev
 
-# Build for production
+# Build for production (dist/ = frontend, dist-server/server.mjs = bundled server)
 npm run build
 
 # Run the production server (serves dist/ + the API on http://localhost:3000)
-NODE_ENV=production npx tsx server.ts
+npm start
 ```
 
 ### Hosting the frontend without the bundled server
