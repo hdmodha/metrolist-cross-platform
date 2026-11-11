@@ -1,5 +1,5 @@
 /** The desktop app (Electron): window, link policy, single instance, saved window state and data, ad blocking. */
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import http from 'node:http';
 import fs from 'node:fs';
 import { MetrolistApp } from '../e2e/fixtures/test';
@@ -176,16 +176,31 @@ test('liked songs survive a restart (same origin every launch)', async () => {
   await close(second);
 });
 
-/** Writes `entries` into the localStorage of `url`'s origin, from the main process (test set-up only). */
-function seedOrigin(app: DesktopApp, url: string, entries: Record<string, string>): Promise<void> {
-  return app.electronApp.evaluate(async ({ BrowserWindow }, { url, entries }) => {
+type SeedWindow = { __seedWindow?: { destroy: () => void } };
+
+/**
+ * Writes `entries` into the localStorage of `url`'s origin (test set-up only): the main process opens
+ * a hidden window there, and Playwright writes through that page with `entries` as an argument (no
+ * script is built from data).
+ */
+async function seedOrigin(app: DesktopApp, url: string, entries: Record<string, string>): Promise<void> {
+  const target = url + 'manifest.webmanifest';
+  await app.electronApp.evaluate(async ({ BrowserWindow }, target) => {
     const win = new BrowserWindow({ show: false });
-    await win.loadURL(url + 'manifest.webmanifest');
-    await win.webContents.executeJavaScript(
-      `(() => { const e = ${JSON.stringify(entries)}; for (const k of Object.keys(e)) localStorage.setItem(k, e[k]); })()`
-    );
-    win.destroy();
-  }, { url, entries });
+    (globalThis as SeedWindow).__seedWindow = win;
+    await win.loadURL(target);
+  }, target);
+  let seedPage: Page | undefined;
+  await expect
+    .poll(() => {
+      seedPage = app.electronApp.windows().find((p) => p.url() === target);
+      return seedPage !== undefined;
+    })
+    .toBe(true);
+  await seedPage!.evaluate((values) => {
+    for (const key of Object.keys(values)) localStorage.setItem(key, values[key]);
+  }, entries);
+  await app.electronApp.evaluate(() => (globalThis as SeedWindow).__seedWindow?.destroy());
 }
 
 test('saved data of an earlier version (on 127.0.0.1) is moved to the new origin once, never over newer data', async () => {
