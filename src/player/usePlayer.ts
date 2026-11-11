@@ -17,11 +17,13 @@ import {
   peekEmbeddability,
   searchTracks,
 } from '../utils/apiClient';
-import { APP_BACKGROUND_EVENT } from '../shared/appBackgroundSignal';
+import { APP_BACKGROUND_EVENT, APP_FOREGROUND_EVENT } from '../shared/appBackgroundSignal';
+import { appActivity } from './appActivity';
 import { connectPlayerDebugLog, debugLog } from '../utils/debugLog';
 import {
   fromPersistedState,
   loadPlayerState,
+  savePlaybackPosition,
   savePlayerState,
   toPersistedState,
   type PersistedAudioSettings,
@@ -81,6 +83,7 @@ export interface StreamBinding {
   onError: (code: number, videoId?: string) => void;
   onSeekHandled: (token: number) => void;
   onExternalPlayPause: (playing: boolean) => void;
+  onPlaybackQuality: (quality: string, videoId: string) => void;
 }
 
 interface Runtime {
@@ -337,6 +340,7 @@ export function usePlayer() {
     if (embedCheckKey) runEmbedPrecheckRef.current();
   }, [embedCheckKey]);
 
+  const qualityLoggedRef = React.useRef(new Set<string>());
   const streamCallbacks = React.useMemo(
     () => ({
       onStatusChange: (status: StreamStatus) => {
@@ -357,6 +361,13 @@ export function usePlayer() {
       },
       onSeekHandled: (token: number) => {
         send({ type: 'seekHandled', token });
+      },
+      onPlaybackQuality: (quality: string, videoId: string) => {
+        const key = `${videoId} ${quality}`;
+        if (qualityLoggedRef.current.has(key)) return;
+        if (qualityLoggedRef.current.size > 200) qualityLoggedRef.current.clear();
+        qualityLoggedRef.current.add(key);
+        debugLog.add('player', `stream quality: ${quality} (video ${videoId})`);
       },
       onExternalPlayPause: (playing: boolean) => {
         debugLog.add('player', `The YouTube player ${playing ? 'started' : 'paused'} by itself`);
@@ -552,12 +563,22 @@ export function usePlayer() {
     return () => window.clearTimeout(timer);
   }, [state, audio, saveNow]);
 
+  // The periodic save while playing writes only the position (a few bytes), not the whole library
   React.useEffect(
     () =>
       clock.subscribe(() => {
-        if (store.getState().isPlaying && isPositionSaveDue(lastSavedAtRef.current, Date.now())) saveNow();
+        const current = store.getState();
+        if (current.isPlaying && current.activeTrackId && isPositionSaveDue(lastSavedAtRef.current, Date.now())) {
+          const track = selectActiveTrack(current);
+          const positionMs = clock.getPositionMs();
+          savePlaybackPosition(
+            current.activeTrackId,
+            track ? Math.max(0, Math.min(positionMs, track.durationMs)) : positionMs
+          );
+          lastSavedAtRef.current = Date.now();
+        }
       }),
-    [clock, saveNow, store]
+    [clock, store]
   );
 
   React.useEffect(() => {
@@ -567,6 +588,7 @@ export function usePlayer() {
   React.useEffect(() => {
     const onVisibility = () => {
       debugLog.add('page', `Visibility ${document.visibilityState}`);
+      appActivity.setBackground(document.visibilityState === 'hidden');
       if (document.visibilityState === 'hidden') saveNow();
     };
     const onPageHide = () => {
@@ -576,15 +598,20 @@ export function usePlayer() {
     // The desktop app's window was minimised / hidden (it keeps playing, the page stays visible)
     const onAppBackground = () => {
       debugLog.add('page', 'Desktop window minimised or hidden: saved');
+      appActivity.setBackground(true);
       saveNow();
     };
+    const onAppForeground = () => appActivity.setBackground(document.visibilityState === 'hidden');
+    appActivity.setBackground(document.visibilityState === 'hidden');
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
     window.addEventListener(APP_BACKGROUND_EVENT, onAppBackground);
+    window.addEventListener(APP_FOREGROUND_EVENT, onAppForeground);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener(APP_BACKGROUND_EVENT, onAppBackground);
+      window.removeEventListener(APP_FOREGROUND_EVENT, onAppForeground);
     };
   }, [saveNow]);
 
@@ -693,6 +720,7 @@ export function usePlayer() {
       actions,
       pauseOrigin: () => (playerPausingRef.current ? 'player' : 'user'),
       onSave: saveNow,
+      onActivity: (activity) => appActivity.setBackground(activity === 'background'),
       log: (message) => debugLog.add('plugin', message),
     });
   }, [actions, clock, saveNow, store]);

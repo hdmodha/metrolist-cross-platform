@@ -15,6 +15,7 @@ import {
   POSITION_SYNC_INTERVAL_MS,
   commandToPlayerCall,
   connectBackgroundPlayback,
+  lifecycleToActivity,
   lifecycleToPlayerEffect,
   planBackgroundSync,
   playbackStateFor,
@@ -165,6 +166,15 @@ describe('the app leaving and returning to the foreground', () => {
     assert.equal(lifecycleToPlayerEffect({ state: 'stop' }), 'save');
     assert.equal(lifecycleToPlayerEffect({ state: 'resume' }), 'none');
     for (const bad of [null, 'pause', {}, { state: 'explode' }, { state: 3 }]) assert.equal(lifecycleToPlayerEffect(bad), null, JSON.stringify(bad));
+  });
+});
+
+describe('lifecycle events and the app activity', () => {
+  test('stop is background, resume is foreground, pause alone is neither', () => {
+    assert.equal(lifecycleToActivity({ state: 'stop' }), 'background');
+    assert.equal(lifecycleToActivity({ state: 'resume' }), 'foreground');
+    assert.equal(lifecycleToActivity({ state: 'pause' }), null);
+    for (const bad of [null, 'stop', {}, { state: 1 }]) assert.equal(lifecycleToActivity(bad), null, JSON.stringify(bad));
   });
 });
 

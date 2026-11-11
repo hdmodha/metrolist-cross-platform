@@ -5,7 +5,7 @@
  */
 import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
-import { appBackgroundScript } from '../src/shared/appBackgroundSignal';
+import { appBackgroundScript, appForegroundScript } from '../src/shared/appBackgroundSignal';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 import { BACKGROUND_COLOR, secureWebPreferences } from './security';
 import { MIN_SIZE, parseWindowState, restoreWindowState, type WindowState } from './policies/windowState';
@@ -61,6 +61,13 @@ export function createMainWindow(userDataDir: string): BrowserWindow {
   };
   win.on('minimize', signalBackground);
   win.on('hide', signalBackground);
+  // Back again: the page polls the position at full speed once more
+  const signalForeground = () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+    win.webContents.executeJavaScript(appForegroundScript(), false).catch(() => undefined);
+  };
+  win.on('restore', signalForeground);
+  win.on('show', signalForeground);
 
   return win;
 }

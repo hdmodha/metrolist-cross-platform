@@ -301,6 +301,11 @@ test('minimised or hidden, the window keeps playing with the page visible, and t
     const w = window as unknown as { __visibilityEvents: string[] };
     w.__visibilityEvents = [];
     document.addEventListener('visibilitychange', () => w.__visibilityEvents.push(document.visibilityState));
+    const w2 = window as unknown as { __appEvents: string[] };
+    w2.__appEvents = [];
+    for (const name of ['metrolist:app-background', 'metrolist:app-foreground']) {
+      window.addEventListener(name, () => w2.__appEvents.push(name));
+    }
   });
   const pageState = () =>
     app.page.evaluate(() => ({
@@ -308,9 +313,11 @@ test('minimised or hidden, the window keeps playing with the page visible, and t
       hidden: document.hidden,
       events: (window as unknown as { __visibilityEvents: string[] }).__visibilityEvents,
     }));
+  const appEvents = () => app.page.evaluate(() => (window as unknown as { __appEvents: string[] }).__appEvents);
   const savedPosition = () =>
     app.page.evaluate(() => {
-      const raw = localStorage.getItem('metrolist.player.v2');
+      // The periodic save writes only the position key; a full save writes both
+      const raw = localStorage.getItem('metrolist.player.position.v1');
       return raw ? Number((JSON.parse(raw) as { positionMs?: number }).positionMs ?? 0) : null;
     });
   // Xvfb has no window manager, so minimize() changes nothing there and fires no 'minimize' event:
@@ -322,13 +329,13 @@ test('minimised or hidden, the window keeps playing with the page visible, and t
       const onEvent = () => {
         fired = true;
       };
-      if (how === 'minimize') win.once('minimize', onEvent);
-      else win.once('hide', onEvent);
+      const watched = how;
+      (win as unknown as NodeJS.EventEmitter).once(watched, onEvent);
       win[how]();
       await new Promise((resolve) => setTimeout(resolve, 300));
-      if (how === 'minimize' && !fired) win.emit('minimize');
-      if (how === 'minimize') win.removeListener('minimize', onEvent);
-      else win.removeListener('hide', onEvent);
+      // (no window manager: minimize / restore change nothing and fire nothing; hide / show are real)
+      if ((how === 'minimize' || how === 'restore') && !fired) win.emit(how);
+      (win as unknown as NodeJS.EventEmitter).removeListener(watched, onEvent);
       return { visible: win.isVisible(), minimized: win.isMinimized(), fired };
     }, action);
 
@@ -337,7 +344,7 @@ test('minimised or hidden, the window keeps playing with the page visible, and t
     ['hide', 'show'],
   ] as const) {
     // The main process tells the page at once (no 5 s wait for the next periodic save)
-    await app.page.evaluate(() => localStorage.removeItem('metrolist.player.v2'));
+    await app.page.evaluate(() => localStorage.removeItem('metrolist.player.position.v1'));
     const state = await windowDo(away);
     if (away === 'hide') expect(state).toMatchObject({ visible: false, fired: true });
     await expect.poll(savedPosition, { timeout: 2000 }).not.toBeNull();
@@ -351,6 +358,10 @@ test('minimised or hidden, the window keeps playing with the page visible, and t
     await expect.poll(savedPosition, { timeout: 12_000 }).toBeGreaterThan(before + 2000);
     expect(await pageState()).toEqual({ visibility: 'visible', hidden: false, events: [] });
     await windowDo(back);
+    // ... and the window coming back tells the page too
+    await expect.poll(async () => (await appEvents()).at(-1)).toBe('metrolist:app-foreground');
+    expect(await appEvents()).toContain('metrolist:app-background');
+    await app.page.evaluate(() => ((window as unknown as { __appEvents: string[] }).__appEvents.length = 0));
   }
   await close(app);
 });
