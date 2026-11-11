@@ -311,6 +311,7 @@ test.describe('background playback plugin (Android and iOS shells)', () => {
     await expect(log).toContainText('Command from the plugin: pause (notification)');
     await expect(log).toContainText('App lifecycle: stop');
     await expect(log).toContainText(/To the plugin: playing/);
+    await expect(log).toContainText(/stream quality: tiny \(video /);
     await expect(log).toContainText(/player\s*Pause/);
     await expect(log).toContainText('Background-playback WebView active (simulated)');
     expect((await pluginCalls(page)).some((c) => c.method === 'getDebugLog')).toBe(true);

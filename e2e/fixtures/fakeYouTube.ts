@@ -67,6 +67,7 @@ interface PlayerOptions {
     onReady?: (ev: { target: unknown }) => void;
     onStateChange?: (ev: { data: number; target: unknown }) => void;
     onError?: (ev: { data: number; target?: unknown }) => void;
+    onPlaybackQualityChange?: (ev: { data: string; target?: unknown }) => void;
   };
 }
 
@@ -109,6 +110,9 @@ export function installFakeYouTubeApi(): void {
       if (destroyed) return;
       state = next;
       if (opts.events.onStateChange) opts.events.onStateChange({ data: next, target: self });
+      if (next === 1 && opts.events.onPlaybackQualityChange) {
+        opts.events.onPlaybackQualityChange({ data: 'tiny', target: self });
+      }
     };
     const start = () => {
       if (ctl.blocked || destroyed) return;
@@ -176,6 +180,7 @@ export function installFakeYouTubeApi(): void {
     self.getCurrentTime = () => time;
     self.getDuration = () => duration();
     self.getPlayerState = () => state;
+    self.getPlaybackQuality = () => 'tiny';
     self.destroy = () => {
       destroyed = true;
       clearInterval(timer);

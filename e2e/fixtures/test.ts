@@ -48,7 +48,6 @@ const TINY_PNG = Buffer.from(
   'base64'
 );
 const IMAGE_HOSTS = /(^|\.)(ytimg\.com|googleusercontent\.com|ggpht\.com)$/;
-const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 const YOUTUBE_API = 'https://www.youtube.com/iframe_api';
 
@@ -115,7 +114,6 @@ export async function installRoutes(target: Pick<BrowserContext, 'route'>, api: 
       return route.fulfill({ contentType: 'text/javascript', body: FAKE_YOUTUBE_IFRAME_API });
     }
     if (IMAGE_HOSTS.test(url.hostname)) return route.fulfill({ contentType: 'image/png', body: TINY_PNG });
-    if (FONT_HOSTS.has(url.hostname)) return route.fulfill({ contentType: 'text/css', body: '' });
     unexpected.push(url.href);
     return route.abort('blockedbyclient');
   });

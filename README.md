@@ -128,7 +128,7 @@ The iOS app has the same plugin, written for iOS: the app declares background au
 
 ### The debug log
 
-For device tests there is a hidden log of the last 100 player, page and plugin events, with timestamps, plus the Android / iOS plugin's own lines (window visibility, what the page reported, commands, the foreground service). Open **Library**, scroll to the bottom and **press and hold the version line ("Metrolist 1.x.y") for about a second**. **Copy** puts the whole log on the clipboard (paste it into a message); **Refresh** reloads the plugin's lines; **Clear** empties it. It is kept in memory only and never sent anywhere. In a browser it is also at `#/debug`. With a computer, `adb logcat -s Metrolist` shows the Android plugin's lines live.
+For device tests there is a hidden log of the last 100 player, page and plugin events, with timestamps, plus the Android / iOS plugin's own lines (window visibility, what the page reported, commands, the foreground service). Open **Library**, scroll to the bottom and **press and hold the version line ("Metrolist 1.x.y") for about a second**. **Copy** puts the whole log on the clipboard (paste it into a message); **Refresh** reloads the plugin's lines; **Clear** empties it. It is kept in memory only and never sent anywhere. It also records the stream quality the YouTube player picked for each song (for example `stream quality: medium`); the app only reads that, it never asks for a quality. In a browser it is also at `#/debug`. With a computer, `adb logcat -s Metrolist` shows the Android plugin's lines live.
 
 ### Platform differences
 
@@ -175,9 +175,14 @@ npm run dev
 # Build for production (dist/ = frontend, dist-server/server.mjs = bundled server)
 npm run build
 
+# Check the size budget (JS, CSS, fonts; no Google Fonts reference)
+npm run check:budget
+
 # Run the production server (serves dist/ + the API on http://localhost:3000)
 npm start
 ```
+
+The web server compresses its responses (gzip / brotli) and caches the hashed files under `/assets/` for a year; `index.html` is revalidated on every visit. The desktop app's server is loopback only and does not compress. The app loads its fonts from its own server, not from Google Fonts.
 
 ### Hosting the frontend without the bundled server
 
@@ -188,6 +193,12 @@ VITE_API_BASE_URL="https://your-metrolist-backend.example.com" npm run build
 ```
 
 The packaged Android / iOS app does not need this.
+
+---
+
+## Third-party notices
+
+The bundled fonts (DM Sans and Plus Jakarta Sans) are licensed under the SIL Open Font License 1.1. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 

@@ -8,6 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { InnerTubeHttpError, type InnerTubeTransport } from '../utils/metrolistCore';
 import { startMetrolistServer, type MetrolistServerOptions, type RunningMetrolistServer } from './createServer';
 
@@ -44,6 +45,21 @@ function request(
   });
 }
 
+/** Like `request`, but the body stays raw bytes (compressed answers). */
+function rawRequest(port: number, urlPath: string, headers: Record<string, string> = {}) {
+  return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: urlPath, headers: { Host: `127.0.0.1:${port}`, ...headers }, agent: false }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const APP_JS = `console.log("app");\n`.repeat(400);
+
 const INDEX_HTML = '<!doctype html><title>Metrolist test shell</title><main></main>';
 const MANIFEST = '{"name":"Metrolist"}';
 
@@ -58,7 +74,7 @@ function makeDist(): string {
   fs.writeFileSync(path.join(dir, 'index.html'), INDEX_HTML);
   fs.writeFileSync(path.join(dir, 'manifest.webmanifest'), MANIFEST);
   fs.mkdirSync(path.join(dir, 'assets'));
-  fs.writeFileSync(path.join(dir, 'assets', 'app.js'), 'console.log("app")');
+  fs.writeFileSync(path.join(dir, 'assets', 'app.js'), APP_JS);
   return dir;
 }
 
@@ -154,7 +170,7 @@ describe('desktop mode', () => {
     const manifest = await request(server.port, '/manifest.webmanifest');
     assert.equal(manifest.status, 200);
     assert.equal(manifest.body, MANIFEST);
-    assert.equal((await request(server.port, '/assets/app.js')).body, 'console.log("app")');
+    assert.equal((await request(server.port, '/assets/app.js')).body, APP_JS);
     for (const appPath of ['/', '/library', '/some/deep/link?x=1']) {
       const reply = await request(server.port, appPath);
       assert.equal(reply.status, 200, appPath);
@@ -376,5 +392,79 @@ test('a busy port rejects with EADDRINUSE (the desktop app falls back to another
     });
   } finally {
     await first.close();
+  }
+});
+
+function decode(reply: { headers: http.IncomingHttpHeaders; body: Buffer }): string {
+  const encoding = reply.headers['content-encoding'];
+  if (encoding === 'br') return zlib.brotliDecompressSync(reply.body).toString('utf8');
+  if (encoding === 'gzip') return zlib.gunzipSync(reply.body).toString('utf8');
+  return reply.body.toString('utf8');
+}
+
+function bigSearchTransport(): InnerTubeTransport {
+  const items = Array.from({ length: 40 }, (_, i) => ({
+    musicResponsiveListItemRenderer: {
+      playlistItemData: { videoId: `abcdefghi${String(i).padStart(2, '0')}` },
+      flexColumns: [
+        { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: `Song number ${i}` }] } } },
+        { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Some Artist • Some Album • 3:22' }] } } },
+      ],
+    },
+  }));
+  const answer = { contents: { sectionListRenderer: { contents: [{ musicShelfRenderer: { contents: items } }] } } };
+  return async () => answer;
+}
+
+describe('compression and caching', () => {
+  test('web mode compresses assets, pages and API answers for clients that accept it; identity otherwise', async () => {
+    const server = await start({ mode: 'web', innerTubeTransport: bigSearchTransport() });
+    try {
+      const gz = await rawRequest(server.port, '/assets/app.js', { 'Accept-Encoding': 'gzip, br' });
+      assert.equal(gz.status, 200);
+      assert.ok(['br', 'gzip'].includes(String(gz.headers['content-encoding'])));
+      assert.ok(gz.body.length < APP_JS.length);
+      assert.equal(decode(gz), APP_JS);
+
+      const plain = await rawRequest(server.port, '/assets/app.js');
+      assert.equal(plain.headers['content-encoding'], undefined);
+      assert.equal(plain.body.toString('utf8'), APP_JS);
+
+      const api = await rawRequest(server.port, '/api/innertube/search?q=song', { 'Accept-Encoding': 'gzip' });
+      assert.equal(api.headers['content-encoding'], 'gzip');
+      assert.equal((JSON.parse(decode(api)) as { tracks: unknown[] }).tracks.length, 20);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('desktop mode never compresses', async () => {
+    const server = await start({ mode: 'desktop', innerTubeTransport: bigSearchTransport() });
+    try {
+      for (const p of ['/assets/app.js', '/api/innertube/search?q=song']) {
+        const reply = await rawRequest(server.port, p, { 'Accept-Encoding': 'gzip, br' });
+        assert.equal(reply.status, 200);
+        assert.equal(reply.headers['content-encoding'], undefined, p);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  for (const mode of ['web', 'desktop'] as const) {
+    test(`${mode} mode: hashed assets are immutable, everything else is revalidated`, async () => {
+      const server = await start({ mode });
+      try {
+        const asset = await request(server.port, '/assets/app.js');
+        assert.equal(asset.headers['cache-control'], 'public, max-age=31536000, immutable');
+        for (const p of ['/', '/index.html', '/manifest.webmanifest', '/library/liked/deep']) {
+          const reply = await request(server.port, p);
+          assert.equal(reply.status, 200, p);
+          assert.equal(reply.headers['cache-control'], 'no-cache', p);
+        }
+      } finally {
+        await server.close();
+      }
+    });
   }
 });

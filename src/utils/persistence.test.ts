@@ -5,7 +5,9 @@ import {
   DEFAULT_PLAYER_STATE,
   LEGACY_STORAGE_KEY,
   MAX_SAVED_QUEUE_TRACKS,
+  POSITION_STORAGE_KEY,
   STORAGE_KEY,
+  savePlaybackPosition,
   fromPersistedState,
   loadPlayerState,
   migrateLegacyState,
@@ -390,5 +392,63 @@ describe('migration from version 1', () => {
     };
     assert.deepEqual(loadPlayerState(readOnly).likedIds, [ytId('a'), ytId('c')]);
     assert.ok(data[LEGACY_STORAGE_KEY], 'v1 is not removed');
+  });
+});
+
+describe('position key', () => {
+  const full = (positionMs: number): PersistedPlayerState => ({
+    ...DEFAULT_PLAYER_STATE,
+    tracks: [{ id: `ytm-${vid('a')}`, videoId: vid('a'), title: 'A', artist: 'X', album: '', durationMs: 200000, coverUrl: '' }],
+    queueIds: [`ytm-${vid('a')}`],
+    activeTrackId: `ytm-${vid('a')}`,
+    positionMs,
+  });
+
+  test('a full save also writes the position key', () => {
+    const storage = memoryStorage();
+    savePlayerState(full(5000), storage);
+    assert.deepEqual(JSON.parse(storage.data[POSITION_STORAGE_KEY]), { trackId: `ytm-${vid('a')}`, positionMs: 5000 });
+  });
+
+  test('a newer position key wins over the full state', () => {
+    const storage = memoryStorage();
+    savePlayerState(full(5000), storage);
+    assert.equal(savePlaybackPosition(`ytm-${vid('a')}`, 42000, storage), true);
+    assert.equal(loadPlayerState(storage).positionMs, 42000);
+  });
+
+  test('a position of another track is ignored', () => {
+    const storage = memoryStorage();
+    savePlayerState(full(5000), storage);
+    savePlaybackPosition('b', 42000, storage);
+    assert.equal(loadPlayerState(storage).positionMs, 5000);
+  });
+
+  test('a corrupt position key is ignored', () => {
+    for (const bad of ['{', '"x"', '{"trackId":"ytm-vida_______","positionMs":-1}', '{"trackId":"ytm-vida_______","positionMs":"9"}', '{"trackId":1,"positionMs":9}']) {
+      const storage = memoryStorage();
+      savePlayerState(full(5000), storage);
+      storage.data[POSITION_STORAGE_KEY] = bad;
+      assert.equal(loadPlayerState(storage).positionMs, 5000, bad);
+    }
+  });
+
+  test('a position past the end is clamped like before', () => {
+    const storage = memoryStorage();
+    savePlayerState(full(5000), storage);
+    savePlaybackPosition(`ytm-${vid('a')}`, 999999999, storage);
+    assert.equal(fromPersistedState(loadPlayerState(storage)).positionMs, 0);
+  });
+
+  test('storage failures are swallowed', () => {
+    const broken: KeyValueStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('quota');
+      },
+      removeItem: () => undefined,
+    };
+    assert.equal(savePlaybackPosition(`ytm-${vid('a')}`, 1, broken), false);
+    assert.equal(savePlayerState(full(1), broken), false);
   });
 });

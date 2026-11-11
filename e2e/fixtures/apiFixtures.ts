@@ -42,7 +42,7 @@ function track(seed: string, title: string, artist: string): InnerTubeParsedTrac
     artist,
     album: `${artist} Album`,
     durationMs: FIXTURE_DURATION_MS,
-    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg?sqp=fixture&rs=fixture`,
   };
 }
 
