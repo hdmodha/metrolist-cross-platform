@@ -98,14 +98,20 @@ The release workflow (`.github/workflows/release-native-builds.yml`) builds both
 
 ### Android (`.apk`) & iOS (`.ipa` / Xcode) via Capacitor
 Capacitor 6, as the release workflow uses. `npm install` already linked the local plugin
-`native/capacitor-background-playback` (Android background play and ad blocking); `cap sync` adds it to
-the Android project. The generated `android/` and `ios/` folders are not committed.
+`native/capacitor-background-playback` (background play, lock-screen controls and ad blocking on Android
+and iOS); `cap sync` adds it to both projects. The generated `android/` and `ios/` folders are not
+committed, so **run `npm run native:prepare` after every `npx cap add`**: it installs Metrolist's Android
+`MainActivity` (`native/android-app/MainActivity.java`, which swaps in the WebView that keeps playing when
+the app is minimised) and adds `UIBackgroundModes: audio` to the iOS `Info.plist`. It refuses to overwrite
+a `MainActivity` that is not Capacitor's untouched default, and running it again changes nothing.
 ```bash
 npm run build
 npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/ios@6
 npx cap add android
-npx cap add ios
+npx cap add ios          # macOS with CocoaPods for `pod install`; elsewhere it only generates the files
 npx cap sync
+npm run native:prepare   # required: background play (Android MainActivity, iOS background audio)
+npm run native:prepare -- --check   # verify only
 
 # Open in Android Studio to build APK/AAB:
 npx cap open android
@@ -113,6 +119,15 @@ npx cap open android
 # Open in Xcode (macOS) to build iOS app:
 npx cap open ios
 ```
+
+After editing the ad-block rules (`src/shared/adBlock.ts`, `adBlockVectors.ts`) or the background-play
+guard's vectors (`src/shared/systemPauseGuardVectors.ts`), run `npm run adblock:rules` (alias
+`npm run native:artifacts`): it regenerates the Android rules asset, the iOS content-blocker list and the
+JUnit / Swift test vectors (a unit test fails while any of them is stale).
+
+**Every change goes to every platform** (web, desktop app, Android, iOS; phone, tablet and desktop
+layouts). If a platform cannot have it, say which and why in the commit message and the pull request.
+See CLAUDE.md §0 for what to run locally, what CI checks per platform and what needs a real device.
 
 ---
 
