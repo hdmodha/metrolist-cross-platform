@@ -1,0 +1,344 @@
+[
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?doubleclick\\.net\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googleadservices\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googlesyndication\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?google-analytics\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googletagservices\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?adservice\\.google\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/pagead\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/pagead\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/ptracking",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/ptracking",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/api\\/stats\\/ads",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/api\\/stats\\/ads",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/api\\/stats\\/atr",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/api\\/stats\\/atr",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/get_midroll_info",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/get_midroll_info",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/log_event",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/log_event",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "block"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/iframe_api",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/iframe_api",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/s\\/player\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/s\\/player\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/embed\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/embed\\/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/player",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/player",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/next",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/youtubei\\/v1\\/next",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/api\\/stats\\/playback",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/api\\/stats\\/playback",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube\\.com\\.?(:[0-9]+)?/api\\/stats\\/watchtime",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?youtube-nocookie\\.com\\.?(:[0-9]+)?/api\\/stats\\/watchtime",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googlevideo\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?ytimg\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?ggpht\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googleusercontent\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?gstatic\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  },
+  {
+    "trigger": {
+      "url-filter": "^https?://([a-z0-9_.-]*\\.)?googleapis\\.com\\.?(:[0-9]+)?/",
+      "url-filter-is-case-sensitive": true
+    },
+    "action": {
+      "type": "ignore-previous-rules"
+    }
+  }
+]

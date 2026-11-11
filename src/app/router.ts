@@ -1,6 +1,7 @@
 /**
  * A tiny hash router (no dependency): `#/`, `#/search?q=…`, `#/library`, `#/library/liked`,
- * `#/library/downloads`. Hash routes work unchanged in the Capacitor WebView, on static hosts and in
+ * `#/library/downloads`, and the hidden debug log `#/debug` (no link in the navigation; a long
+ * press on the version in Library opens it). Hash routes work unchanged in the Capacitor WebView, on static hosts and in
  * the desktop bundles, and need no server fallback. Unknown routes fall back to Home.
  *
  * `parseRoute` / `formatRoute` are pure; `navigate` and `subscribeToLocation` wrap the History API.
@@ -11,7 +12,8 @@ export type Route =
   | { name: 'search'; query: string }
   | { name: 'library' }
   | { name: 'liked' }
-  | { name: 'downloads' };
+  | { name: 'downloads' }
+  | { name: 'debug' };
 
 export type RouteName = Route['name'];
 
@@ -39,6 +41,8 @@ export function parseRoute(hash: string): Route {
       return { name: 'liked' };
     case '/library/downloads':
       return { name: 'downloads' };
+    case '/debug':
+      return { name: 'debug' };
     default:
       return { name: 'home' };
   }
@@ -58,6 +62,8 @@ export function formatRoute(route: Route): string {
       return '#/library/liked';
     case 'downloads':
       return '#/library/downloads';
+    case 'debug':
+      return '#/debug';
   }
 }
 

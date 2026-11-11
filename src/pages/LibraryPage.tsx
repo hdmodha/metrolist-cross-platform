@@ -2,6 +2,7 @@ import React from 'react';
 import { ChevronRight, Download, Heart, History } from 'lucide-react';
 import { useAppActions } from '../app/AppActionsContext';
 import type { Route } from '../app/router';
+import { APP_VERSION } from '../appVersion';
 import type { MetrolistTrack } from '../data/track';
 import { EmptyState } from '../components/EmptyState';
 import { NavLink } from '../components/NavLink';
@@ -16,11 +17,21 @@ interface LibraryPageProps extends ListStatus {
   recentTracks: MetrolistTrack[];
 }
 
-/** Your Library: Liked Songs and Downloads, then Recently played. */
+/** How long the version must be pressed to open the hidden debug log. */
+export const DEBUG_LONG_PRESS_MS = 800;
+
+/** Your Library: Liked Songs and Downloads, then Recently played; the version at the bottom. */
 export const LibraryPage = React.memo(function LibraryPage({ likedCount, downloadedCount, recentTracks, ...status }: LibraryPageProps) {
   countRender('LibraryPage');
   const { go } = useAppActions();
   const playRecent = usePlayFromList(recentTracks, 'library');
+  // A long press on the version opens the hidden debug log (#/debug): no button in the normal UI
+  const pressTimer = React.useRef<number | null>(null);
+  const cancelPress = () => {
+    if (pressTimer.current !== null) window.clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+  };
+  React.useEffect(() => cancelPress, []);
   const entries: Array<{ label: string; to: Route; count: number; icon: React.ReactNode; tile: string }> = [
     { label: 'Liked Songs', to: { name: 'liked' }, count: likedCount, icon: <Heart className="w-7 h-7 fill-current" />, tile: 'from-indigo-500 to-emerald-400' },
     { label: 'Downloads', to: { name: 'downloads' }, count: downloadedCount, icon: <Download className="w-7 h-7" />, tile: 'from-emerald-600 to-teal-400' },
@@ -62,6 +73,24 @@ export const LibraryPage = React.memo(function LibraryPage({ likedCount, downloa
           </EmptyState>
         )}
       </section>
+
+      <p
+        data-testid="app-version"
+        className="pt-2 text-xs text-zinc-600 select-none [-webkit-touch-callout:none]"
+        onPointerDown={() => {
+          cancelPress();
+          pressTimer.current = window.setTimeout(() => {
+            pressTimer.current = null;
+            go({ name: 'debug' });
+          }, DEBUG_LONG_PRESS_MS);
+        }}
+        onPointerUp={cancelPress}
+        onPointerLeave={cancelPress}
+        onPointerCancel={cancelPress}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        Metrolist {APP_VERSION}
+      </p>
     </div>
   );
 });

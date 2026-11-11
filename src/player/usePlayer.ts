@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { STATIC_YTM_FALLBACK } from '../data/fallbackTracks';
-import { connectBackgroundPlayback, getAndroidBackgroundPlayback } from '../native/backgroundPlayback';
+import { connectBackgroundPlayback, getNativeBackgroundPlayback } from '../native/backgroundPlayback';
 import {
   checkEmbeddable,
   fetchRadioContinuation,
@@ -17,6 +17,7 @@ import {
   peekEmbeddability,
   searchTracks,
 } from '../utils/apiClient';
+import { connectPlayerDebugLog, debugLog } from '../utils/debugLog';
 import {
   fromPersistedState,
   loadPlayerState,
@@ -253,6 +254,9 @@ export function usePlayer() {
 
   /* ------------------------------------ stream callbacks ------------------------------------- */
 
+  /** True while a pause the YouTube player made itself is dispatched (read by the native plugin sync). */
+  const playerPausingRef = React.useRef(false);
+
   /** `trackId videoId` pairs whose player was already re-created once after an error. */
   const retriedStreamsRef = React.useRef(new Set<string>());
 
@@ -347,13 +351,25 @@ export function usePlayer() {
         if (trackId) send({ type: 'trackEnded', trackId, random: Math.random() });
       },
       onError: (code: number, videoId?: string) => {
+        debugLog.add('player', `Stream error ${code}${videoId ? ` (${videoId})` : ''}`, 'warn');
         void recoverFromStreamError(code, videoId);
       },
       onSeekHandled: (token: number) => {
         send({ type: 'seekHandled', token });
       },
       onExternalPlayPause: (playing: boolean) => {
-        send({ type: 'setPlaying', playing });
+        debugLog.add('player', `The YouTube player ${playing ? 'started' : 'paused'} by itself`);
+        if (playing) {
+          send({ type: 'setPlaying', playing });
+          return;
+        }
+        // The background-playback plugin tells this pause apart from the listener's
+        playerPausingRef.current = true;
+        try {
+          send({ type: 'setPlaying', playing });
+        } finally {
+          playerPausingRef.current = false;
+        }
       },
     }),
     [clock, recoverFromStreamError, send, store]
@@ -549,13 +565,18 @@ export function usePlayer() {
 
   React.useEffect(() => {
     const onVisibility = () => {
+      debugLog.add('page', `Visibility ${document.visibilityState}`);
       if (document.visibilityState === 'hidden') saveNow();
     };
+    const onPageHide = () => {
+      debugLog.add('page', 'Page hide');
+      saveNow();
+    };
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('pagehide', saveNow);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('pagehide', saveNow);
+      window.removeEventListener('pagehide', onPageHide);
     };
   }, [saveNow]);
 
@@ -648,15 +669,40 @@ export function usePlayer() {
     });
   }, [clock, durationMs, state.isPlaying, store]);
 
-  /* --------------------------------- Android background play --------------------------------- */
+  /* ---------------------------------- native background play -------------------------------- */
 
-  // The packaged Android app only (a no-op on the web, desktop and iOS): the local Capacitor plugin
-  // keeps playing in the background and sends the notification / headset commands back
+  // The packaged Android / iOS app only (a no-op on the web and the desktop app): the local Capacitor
+  // plugin keeps playing in the background, sends the notification / headset commands back, and
+  // says when the app leaves the foreground (saved here: the page may stay "visible" meanwhile)
   React.useEffect(() => {
-    const plugin = getAndroidBackgroundPlayback();
+    const plugin = getNativeBackgroundPlayback();
     if (!plugin) return;
-    return connectBackgroundPlayback({ plugin, store, clock, actions });
-  }, [actions, clock, store]);
+    debugLog.add('plugin', `Background playback plugin (${plugin.platform}) connected`);
+    return connectBackgroundPlayback({
+      plugin,
+      store,
+      clock,
+      actions,
+      pauseOrigin: () => (playerPausingRef.current ? 'player' : 'user'),
+      onSave: saveNow,
+      log: (message) => debugLog.add('plugin', message),
+    });
+  }, [actions, clock, saveNow, store]);
+
+  /* --------------------------------------- debug log ----------------------------------------- */
+
+  // The hidden debug log (#/debug): player changes and network events, in memory only
+  React.useEffect(() => connectPlayerDebugLog(store), [store]);
+  React.useEffect(() => {
+    const onOnline = () => debugLog.add('page', 'Online');
+    const onOffline = () => debugLog.add('page', 'Offline', 'warn');
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   /* --------------------------------------- keyboard ------------------------------------------ */
 

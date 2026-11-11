@@ -12,6 +12,12 @@ describe('parseRoute', () => {
     assert.deepEqual(parseRoute('#/library/downloads'), { name: 'downloads' });
   });
 
+  test('the hidden debug log', () => {
+    assert.deepEqual(parseRoute('#/debug'), { name: 'debug' });
+    assert.deepEqual(parseRoute('#/debug/'), { name: 'debug' });
+    assert.deepEqual(parseRoute('#/DEBUG'), { name: 'home' });
+  });
+
   test('an empty hash, a missing slash or a trailing slash still work', () => {
     assert.deepEqual(parseRoute(''), { name: 'home' });
     assert.deepEqual(parseRoute('#'), { name: 'home' });
@@ -48,6 +54,7 @@ describe('formatRoute', () => {
     assert.equal(formatRoute({ name: 'library' }), '#/library');
     assert.equal(formatRoute({ name: 'liked' }), '#/library/liked');
     assert.equal(formatRoute({ name: 'downloads' }), '#/library/downloads');
+    assert.equal(formatRoute({ name: 'debug' }), '#/debug');
   });
 
   test('queries are encoded so every character survives a round trip', () => {

@@ -11,6 +11,7 @@ import { PlayerBar } from './components/PlayerBar';
 import { Sidebar } from './components/Sidebar';
 import { YouTubeStreamBridge } from './components/YouTubeStreamBridge';
 import { CollectionPage } from './pages/CollectionPage';
+import { DebugPage } from './pages/DebugPage';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { SearchPage } from './pages/SearchPage';
@@ -110,6 +111,9 @@ export default function App() {
       break;
     case 'downloads':
       page = <CollectionPage key="downloads" kind="downloads" tracks={downloadedTracks} playingFrom={state.playingFrom} {...status} />;
+      break;
+    case 'debug':
+      page = <DebugPage />;
       break;
     default:
       page = (

@@ -13,12 +13,13 @@ import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
-import com.getcapacitor.Logger;
+import java.lang.ref.WeakReference;
 
 /**
  * The native half of background playback, one per process (main thread only). It holds what the
@@ -41,6 +42,13 @@ import com.getcapacitor.Logger;
  * confirms within {@link #PLAY_CONFIRMATION_TIMEOUT_MS}, or the optimistic state is dropped. If
  * Android refuses a foreground start anyway, the notification is still posted and playback goes on
  * as long as the system lets the process live.
+ *
+ * <p>It also keeps the page playing when the app is minimised: while music is wanted, the app's
+ * {@link BackgroundPlaybackWebView} keeps reporting its window visible (see there), and a resume
+ * from the notification / session makes it visible BEFORE {@code play} reaches the page. If the
+ * page still reports a pause the player made itself right after the app went to the background,
+ * {@link SystemPauseGuard} has the controller send {@code play} back once (never against a pause the
+ * listener asked for). Every step is logged ({@link MetrolistLog}, tag {@code Metrolist}).
  */
 final class PlaybackController {
 
@@ -58,8 +66,9 @@ final class PlaybackController {
     static final String ACTION_PREVIOUS = "com.metrolist.backgroundplayback.PREVIOUS";
     static final String ACTION_DISMISS = "com.metrolist.backgroundplayback.DISMISS";
 
-    private static final String TAG = "MetrolistPlayback";
     private static final long PLAY_CONFIRMATION_TIMEOUT_MS = 8000;
+    /** The reason of the {@code play} the controller sends when the system paused a backgrounded page. */
+    static final String REASON_SYSTEM_PAUSE = "systemPause";
     private static final long SESSION_ACTIONS =
         PlaybackStateCompat.ACTION_PLAY |
         PlaybackStateCompat.ACTION_PAUSE |
@@ -91,13 +100,16 @@ final class PlaybackController {
     private boolean serviceStarting;
     private boolean awaitingPlayConfirmation;
     private boolean noisyReceiverRegistered;
+    private final SystemPauseGuard guard = new SystemPauseGuard();
+    private WeakReference<BackgroundPlaybackWebView> webView = new WeakReference<>(null);
 
     private final Runnable dropUnconfirmedPlay = () -> {
         if (!awaitingPlayConfirmation || snapshot == null) return;
         awaitingPlayConfirmation = false;
-        Logger.info(TAG, "The page did not confirm the resume: back to paused");
-        snapshot = snapshot.withState(PlaybackSnapshot.State.PAUSED, snapshot.positionMs, android.os.SystemClock.elapsedRealtime());
+        MetrolistLog.w("The page did not confirm the resume within " + PLAY_CONFIRMATION_TIMEOUT_MS + " ms: back to paused");
+        snapshot = snapshot.withState(PlaybackSnapshot.State.PAUSED, snapshot.positionMs, SystemClock.elapsedRealtime());
         publishPlaybackState();
+        applyWebViewVisibility();
         applyServiceState();
     };
 
@@ -161,12 +173,32 @@ final class PlaybackController {
     }
 
     /** The page reported the player (BackgroundPlayback.update). */
-    void update(PlaybackSnapshot next) {
+    void update(PlaybackSnapshot reported) {
         PlaybackSnapshot previous = snapshot;
+        long now = SystemClock.elapsedRealtime();
+        if (previous == null || previous.state != reported.state || !reported.sameMetadata(previous)) {
+            MetrolistLog.i(
+                "Page: " + reported.state.wireName() + (reported.state == PlaybackSnapshot.State.PAUSED ? " (by " + reported.pausedBy + ")" : "") +
+                ", \"" + reported.title + "\" at " + reported.positionMs / 1000 + " s" + (guard.isInBackground() ? ", app in the background" : "")
+            );
+        }
+        boolean systemPaused = guard.onUpdate(reported.state.wireName(), reported.pausedBy, now);
+        PlaybackSnapshot next = reported;
+        if (systemPaused) {
+            // The player paused itself right after the app went to the background, and the listener did
+            // not ask for it: keep everything as if playing (foreground service, visible WebView) and ask
+            // the page to play again, once
+            MetrolistLog.w("The system paused the player within " + SystemPauseGuard.WINDOW_MS + " ms of going to the background: sending play once");
+            next = reported.withState(PlaybackSnapshot.State.BUFFERING, reported.positionMs, now);
+        }
         snapshot = next;
         if (awaitingPlayConfirmation) {
             awaitingPlayConfirmation = false;
             main.removeCallbacks(dropUnconfirmedPlay);
+        }
+        if (systemPaused) {
+            awaitingPlayConfirmation = true;
+            main.postDelayed(dropUnconfirmedPlay, PLAY_CONFIRMATION_TIMEOUT_MS);
         }
         if (!session.isActive()) session.setActive(true);
         if (!next.sameMetadata(previous)) {
@@ -184,11 +216,14 @@ final class PlaybackController {
         }
         publishPlaybackState();
         setNoisyReceiverRegistered(next.wantsForeground());
+        applyWebViewVisibility();
         applyServiceState();
+        if (systemPaused) dispatch("play", -1, REASON_SYSTEM_PAUSE);
     }
 
     /** Nothing to play any more: the notification, the session and the service go away. */
     void stop() {
+        if (snapshot != null) MetrolistLog.i("Stop: nothing to play any more");
         snapshot = null;
         awaitingPlayConfirmation = false;
         main.removeCallbacks(dropUnconfirmedPlay);
@@ -197,6 +232,7 @@ final class PlaybackController {
         session.setActive(false);
         if (service != null) service.shutDown();
         notifications.cancel(NOTIFICATION_ID);
+        applyWebViewVisibility();
     }
 
     /** The permission was just granted: show the notification of what is playing. */
@@ -232,7 +268,7 @@ final class PlaybackController {
             return;
         }
         if (!snapshot.wantsForeground()) {
-            snapshot = snapshot.withState(PlaybackSnapshot.State.BUFFERING, snapshot.positionMs, android.os.SystemClock.elapsedRealtime());
+            snapshot = snapshot.withState(PlaybackSnapshot.State.BUFFERING, snapshot.positionMs, SystemClock.elapsedRealtime());
             awaitingPlayConfirmation = true;
             main.removeCallbacks(dropUnconfirmedPlay);
             main.postDelayed(dropUnconfirmedPlay, PLAY_CONFIRMATION_TIMEOUT_MS);
@@ -240,6 +276,9 @@ final class PlaybackController {
             setNoisyReceiverRegistered(true);
             applyServiceState();
         }
+        // The page must be "visible" again before it is asked to play: a hidden page's player would be
+        // paused again by the WebView. The play command reaches the page after this (posted to the WebView).
+        applyWebViewVisibility();
         dispatch("play", -1, reason);
     }
 
@@ -259,8 +298,50 @@ final class PlaybackController {
     }
 
     private void dispatch(String action, long positionMs, String reason) {
+        if (!REASON_SYSTEM_PAUSE.equals(reason)) guard.onUserCommand(action);
         CommandListener current = listener;
+        MetrolistLog.i(
+            "Command to the page: " + action + (positionMs >= 0 ? " " + positionMs / 1000 + " s" : "") + " (" + reason + ")" +
+            (current == null ? ", but no page is listening" : "")
+        );
         if (current != null) current.onCommand(action, positionMs, reason);
+    }
+
+    /* ------------------------------------ app visibility ------------------------------------ */
+
+    /** The app's WebView (null if the MainActivity hook is missing: then music stops on Home). */
+    void attachWebView(BackgroundPlaybackWebView view) {
+        webView = new WeakReference<>(view);
+        view.setWindowVisibilityListener(visibility -> {
+            if (visibility == android.view.View.VISIBLE) onAppForeground("window visible");
+            else onAppBackground("window " + WindowVisibilityPolicy.name(visibility));
+        });
+        applyWebViewVisibility();
+    }
+
+    void detachWebView(BackgroundPlaybackWebView view) {
+        if (webView.get() != view) return;
+        view.setWindowVisibilityListener(null);
+        webView = new WeakReference<>(null);
+    }
+
+    /** The app went to the background (its window was hidden, or the activity stopped). */
+    void onAppBackground(String why) {
+        if (!guard.isInBackground()) {
+            MetrolistLog.i("App in the background (" + why + ")" + (snapshot != null && snapshot.wantsForeground() ? ", music wanted" : ""));
+        }
+        guard.onBackground(SystemClock.elapsedRealtime());
+    }
+
+    void onAppForeground(String why) {
+        if (guard.isInBackground()) MetrolistLog.i("App in the foreground (" + why + ")");
+        guard.onForeground();
+    }
+
+    /** While music is wanted the WebView reports its window visible, so the page keeps playing. */
+    private void applyWebViewVisibility() {
+        BackgroundPlaybackWebView view = webView.get();
+        if (view != null) view.setKeepWindowVisible(snapshot != null && snapshot.wantsForeground());
     }
 
     /* --------------------------------------- service ---------------------------------------- */
@@ -310,7 +391,7 @@ final class PlaybackController {
             serviceStarting = true;
         } catch (IllegalStateException | SecurityException e) {
             // Android 12+ refused a foreground start from the background: keep the controls anyway
-            Logger.warn(TAG, "Foreground service not started: " + e.getMessage());
+            MetrolistLog.w("Foreground service not started: " + e);
             notifications.notify(NOTIFICATION_ID, fallback);
         }
     }
@@ -415,7 +496,7 @@ final class PlaybackController {
             }
             noisyReceiverRegistered = register;
         } catch (RuntimeException e) {
-            Logger.warn(TAG, "Noisy-audio receiver: " + e.getMessage());
+            MetrolistLog.w("Noisy-audio receiver: " + e);
         }
     }
 

@@ -6,7 +6,6 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeWebViewClient;
-import com.getcapacitor.Logger;
 import java.io.ByteArrayInputStream;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,7 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class AdBlockingWebViewClient extends BridgeWebViewClient {
 
-    private static final String TAG = "MetrolistAdBlock";
     /** The first block is logged, then every 50th, so the log shows it working without flooding. */
     private static final int LOG_EVERY = 50;
 
@@ -39,7 +37,7 @@ final class AdBlockingWebViewClient extends BridgeWebViewClient {
         if (url != null && rules.shouldBlock(url.toString(), request.isForMainFrame())) {
             int count = blocked.incrementAndGet();
             if (count == 1 || count % LOG_EVERY == 0) {
-                Logger.info(TAG, count + " ad / tracking request(s) blocked so far (latest: " + url.getHost() + ")");
+                MetrolistLog.i(count + " ad / tracking request(s) blocked so far (latest: " + url.getHost() + ")");
             }
             return emptyResponse();
         }

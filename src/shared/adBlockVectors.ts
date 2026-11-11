@@ -164,12 +164,35 @@ const URL_PARSING: readonly AdBlockVector[] = [
   { url: 'https://', block: false },
 ];
 
+/**
+ * Cases that pin the iOS translation to a WebKit content-blocker list (`webkitContentBlocker.ts`):
+ * a host rule beats a never-block path, path rules start at the path, look-alike hosts, case.
+ */
+const WEBKIT_TRANSLATION: readonly AdBlockVector[] = [
+  { url: 'https://googleads.g.doubleclick.net/embed/x', block: true },
+  { url: 'https://ad.doubleclick.net/youtubei/v1/player', block: true },
+  { url: 'https://youtube.com/pagead/x', block: true },
+  { url: 'https://www.youtube.com/embed/x/pagead/', block: false },
+  { url: 'https://www.youtube.com/embed/abc?list=pagead', block: false },
+  { url: 'https://www.youtube.com/iframe_api?x=/pagead/', block: false },
+  { url: 'https://www.youtube.com:8443/s/player/abc/base.js', block: false },
+  { url: 'https://www.youtube.com/api/stats/ads/../playback?ns=yt', block: false },
+  { url: 'https://rr1---sn-abc.googlevideo.com/pagead/x', block: false },
+  { url: 'https://i.ytimg.com.:443/vi/x/hqdefault.jpg', block: false },
+  { url: 'https://www.youtube.com/Pagead/x', block: false },
+  { url: 'https://evil-youtube.com/pagead/x', block: false },
+  { url: 'https://youtube.com.example.com/pagead/x', block: false },
+  { url: 'https://www.youtube-nocookie.com/embed/abc', block: false },
+  { url: 'https://www.youtube-nocookie.com/api/stats/atr?ns=yt', block: true },
+];
+
 export const AD_BLOCK_VECTORS: readonly AdBlockVector[] = [
   ...AD_URLS.map((url) => ({ url, block: true })),
   ...PLAYBACK_URLS.map((url) => ({ url, block: false })),
   ...HOST_MATCHING,
   ...RESOURCE_TYPES_AND_SCHEMES,
   ...URL_PARSING,
+  ...WEBKIT_TRANSLATION,
 ];
 
 /** `ad-block-vectors.json` for the Android plugin's JUnit test. */
