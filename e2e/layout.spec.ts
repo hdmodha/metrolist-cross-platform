@@ -71,6 +71,10 @@ test.describe('layout', () => {
     await expectNoOverflow(app, 'now playing');
     await app.openQueue();
     await expectNoOverflow(app, 'queue');
+    await app.closeNowPlaying();
+    await app.page.goto('/#/debug');
+    await expect(app.heading).toHaveText('Debug log');
+    await expectNoOverflow(app, 'debug log');
   });
 
   test('below 1024 px: tab bar + docked mini player; from 1024 px: sidebar + player bar', async ({ app, page }) => {
@@ -133,6 +137,10 @@ test.describe('layout', () => {
     expect(await smallTargets(app), 'search results + mini player').toEqual([]);
     await app.goTo('Library');
     expect(await smallTargets(app), 'library').toEqual([]);
+    await app.page.goto('/#/debug');
+    await expect(app.heading).toHaveText('Debug log');
+    expect(await smallTargets(app), 'debug log').toEqual([]);
+    await app.page.goBack();
     await app.openCollection('Liked Songs');
     expect(await smallTargets(app), 'liked').toEqual([]);
     await app.openNowPlaying();

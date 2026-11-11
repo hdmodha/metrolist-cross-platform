@@ -56,7 +56,7 @@ export const DebugPage = React.memo(function DebugPage() {
     'tap-target inline-flex items-center gap-2 rounded-full bg-white/[0.08] hover:bg-white/[0.14] px-4 py-2 text-sm font-semibold text-white cursor-pointer';
   return (
     <div className="space-y-4">
-      <NavLink to={{ name: 'library' }} className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
+      <NavLink to={{ name: 'library' }} className="tap-target inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-white">
         <ChevronLeft className="w-4 h-4" aria-hidden="true" />
         Library
       </NavLink>
