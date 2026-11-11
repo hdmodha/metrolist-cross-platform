@@ -191,8 +191,6 @@ export function usePlayer() {
     };
   }, [clock, send, store]);
 
-  /* ------------------------------------ stream callbacks ------------------------------------- */
-
   /* ------------------------------ unplayable uploads --------------------------------------- */
 
   /**
@@ -252,6 +250,8 @@ export function usePlayer() {
     [send, store]
   );
 
+  /* ------------------------------------ stream callbacks ------------------------------------- */
+
   /** `trackId videoId` pairs whose player was already re-created once after an error. */
   const retriedStreamsRef = React.useRef(new Set<string>());
 
@@ -285,7 +285,13 @@ export function usePlayer() {
           return;
         }
       }
-      send({ type: 'trackUnplayable', trackId: plan.trackId, random: Math.random(), reason: plan.reason, videoId: current.videoId });
+      send({
+        type: 'trackUnplayable',
+        trackId: plan.trackId,
+        random: Math.random(),
+        reason: plan.reason,
+        videoId: current.videoId,
+      });
     },
     [findReplacementUpload, reinitStream, send, store]
   );
