@@ -33,7 +33,9 @@ npm run adblock:rules
 
 # 7. Dependencies: must report 0 vulnerabilities (and the minimatch override must hold)
 npm audit
-npm ls minimatch
+npx -y npm@11.21.1 ls minimatch            # npm 11, as the release jobs use: exit 0, minimatch@11.0.1 "overridden"
+# (not plain `npm ls minimatch` under npm 10: it reports the range-scoped overrides in package.json
+#  as "invalid" and exits 1 although the installed tree is correct; npm 11 understands them)
 
 # 8. After touching electron/, electron-builder.yml or the build: package and smoke-test the app
 npm run desktop:pack
