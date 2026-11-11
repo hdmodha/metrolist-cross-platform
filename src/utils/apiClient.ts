@@ -19,6 +19,13 @@ import {
   type InnerTubeParsedTrack,
   type InnerTubeTransport,
 } from './metrolistCore';
+import {
+  MAX_EMBEDDABLE_IDS,
+  buildOEmbedUrl,
+  embeddabilityFromOEmbedStatus,
+  readEmbeddabilityResults,
+  type Embeddability,
+} from './embeddability';
 import { LruTtlCache } from './lruCache';
 
 /** Backend requests (the server retries upstream within 16 s, so this leaves it room to answer). */
@@ -30,6 +37,10 @@ const DEFAULT_RADIO_SEED_VIDEO_ID = 'a5uQMwRMHcs';
 
 /** Repeated searches (and artist-chip switches) are answered instantly from memory. */
 const searchCache = new LruTtlCache<InnerTubeParsedTrack[]>({ maxEntries: 30, ttlMs: 5 * 60 * 1000 });
+
+/** Embeddability answers per video id (`true` / `false`), and recently inconclusive checks. */
+const embeddabilityCache = new LruTtlCache<boolean>({ maxEntries: 2000, ttlMs: 6 * 60 * 60 * 1000 });
+const inconclusiveEmbeddability = new LruTtlCache<true>({ maxEntries: 500, ttlMs: 2 * 60 * 1000 });
 
 /** One page of YouTube Music radio. `continuation` is the token of the next page (`null` = exhausted). */
 export interface RadioPage {
@@ -295,4 +306,94 @@ export async function fetchRadioContinuation(
       ),
     () => fetchInnerTubeRadioPage(directInnerTubeTransport(), request.seedVideoId, continuation)
   );
+}
+
+/* ------------------------------------- embeddability ------------------------------------------- */
+
+/**
+ * What is known about a video without asking: `true` / `false`, `null` when a recent check was
+ * inconclusive (treated as playable), `undefined` when it was never checked.
+ */
+export function peekEmbeddability(videoId: string): Embeddability | undefined {
+  const now = Date.now();
+  const known = embeddabilityCache.get(videoId, now);
+  if (known !== undefined) return known;
+  return inconclusiveEmbeddability.get(videoId, now) ? null : undefined;
+}
+
+/** Forgets every embeddability answer (tests). */
+export function resetEmbeddabilityCache(): void {
+  embeddabilityCache.clear();
+  inconclusiveEmbeddability.clear();
+}
+
+/** Native shell: one oEmbed GET per video through CapacitorHttp (no CORS there). */
+async function directEmbeddability(ids: string[]): Promise<Record<string, Embeddability>> {
+  const cap = getCapacitor();
+  const out: Record<string, Embeddability> = {};
+  const nativePromise = isNativeShell() ? cap?.nativePromise : undefined;
+  await Promise.all(
+    ids.map(async (id) => {
+      out[id] = null;
+      if (typeof nativePromise !== 'function') return;
+      try {
+        const response = await nativePromise('CapacitorHttp', 'request', {
+          url: buildOEmbedUrl(id).href,
+          method: 'GET',
+          responseType: 'json',
+          connectTimeout: DIRECT_ATTEMPT_TIMEOUT_MS,
+          readTimeout: DIRECT_ATTEMPT_TIMEOUT_MS,
+        });
+        out[id] = embeddabilityFromOEmbedStatus(typeof response?.status === 'number' ? response.status : 0);
+      } catch {
+        // unknown
+      }
+    })
+  );
+  return out;
+}
+
+/**
+ * Whether each video can be played in the embedded player (YouTube's oEmbed: 401 = its owner turned
+ * that off). Known answers come from memory. Never rejects except on a caller abort: a failed check
+ * answers `null` (unknown, treated as playable).
+ */
+export async function checkEmbeddable(
+  videoIds: readonly string[],
+  signal?: AbortSignal
+): Promise<Record<string, Embeddability>> {
+  const out: Record<string, Embeddability> = {};
+  const missing: string[] = [];
+  for (const id of videoIds) {
+    if (!isValidYouTubeVideoId(id) || id.trim() !== id || id in out || missing.includes(id)) continue;
+    const known = peekEmbeddability(id);
+    if (known === undefined) missing.push(id);
+    else out[id] = known;
+  }
+  for (let start = 0; start < missing.length; start += MAX_EMBEDDABLE_IDS) {
+    const chunk = missing.slice(start, start + MAX_EMBEDDABLE_IDS);
+    let results: Record<string, Embeddability>;
+    try {
+      results = await backendThenDirect(
+        signal,
+        async () =>
+          readEmbeddabilityResults(
+            await fetchBackendJson<unknown>(`/api/innertube/embeddable?ids=${encodeURIComponent(chunk.join(','))}`, signal),
+            chunk
+          ),
+        () => directEmbeddability(chunk)
+      );
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      results = readEmbeddabilityResults(null, chunk);
+    }
+    const now = Date.now();
+    for (const id of chunk) {
+      const result = results[id] ?? null;
+      out[id] = result;
+      if (result === null) inconclusiveEmbeddability.set(id, true, now);
+      else embeddabilityCache.set(id, result, now);
+    }
+  }
+  return out;
 }

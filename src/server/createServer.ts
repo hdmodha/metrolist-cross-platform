@@ -28,6 +28,14 @@ import {
   withInnerTubeRetry,
   type InnerTubeTransport,
 } from '../utils/metrolistCore';
+import { LruTtlCache } from '../utils/lruCache';
+import {
+  OEMBED_ORIGIN,
+  buildOEmbedUrl,
+  embeddabilityFromOEmbedStatus,
+  parseEmbeddableIds,
+  type Embeddability,
+} from '../utils/embeddability';
 import { isAllowedDesktopHost } from './hostAllowlist';
 import { DEFAULT_RATE_LIMIT_PER_MINUTE } from './serverConfig';
 
@@ -57,7 +65,12 @@ export interface MetrolistServerOptions {
   rateLimitPerMinute?: number;
   /** Replaces the YouTube Music transport (tests). */
   innerTubeTransport?: InnerTubeTransport;
+  /** Replaces the oEmbed request; resolves with the HTTP status (tests). */
+  oEmbedStatus?: OEmbedStatusFetcher;
 }
+
+/** One oEmbed GET; resolves with the HTTP status, rejects on a timeout / network failure. */
+export type OEmbedStatusFetcher = (url: URL, timeoutMs: number) => Promise<number>;
 
 export interface RunningMetrolistServer {
   readonly server: http.Server;
@@ -112,6 +125,25 @@ export const innerTubeTransport: InnerTubeTransport = async (endpoint, body, opt
     throw new InnerTubeHttpError(response.status, `InnerTube ${endpoint} upstream returned ${response.status}`);
   }
   return response.json();
+};
+
+const OEMBED_TIMEOUT_MS = 5000;
+const EMBEDDABILITY_CACHE_ENTRIES = 5000;
+const EMBEDDABILITY_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+
+/** Server-side oEmbed request: the fixed youtube.com oEmbed URL only, origin checked again here. */
+export const oEmbedStatus: OEmbedStatusFetcher = async (url, timeoutMs) => {
+  if (url.origin !== OEMBED_ORIGIN || url.pathname !== '/oembed') {
+    throw new Error('Invalid oEmbed upstream URL.');
+  }
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { 'User-Agent': INNERTUBE_HEADERS['User-Agent'], Accept: 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  // Only the status matters; do not keep the body around
+  await response.body?.cancel().catch(() => undefined);
+  return response.status;
 };
 
 function resolveHost(mode: ServerMode, host: string | undefined): string {
@@ -281,6 +313,41 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
       const message = err instanceof Error ? err.message : 'Recommendation engine error';
       res.status(502).json({ error: message });
     }
+  });
+
+  /**
+   * 3. Embeddability pre-check (`/api/innertube/embeddable?ids=a,b,c`, at most 10 ids): YouTube's
+   * oEmbed answers 401 / 403 / 404 for videos that cannot be played in an embedded player.
+   */
+  const fetchOEmbedStatus = options.oEmbedStatus ?? oEmbedStatus;
+  const embeddabilityCache = new LruTtlCache<boolean>({
+    maxEntries: EMBEDDABILITY_CACHE_ENTRIES,
+    ttlMs: EMBEDDABILITY_TTL_MS,
+  });
+  const checkEmbeddability = async (videoId: string): Promise<Embeddability> => {
+    const cached = embeddabilityCache.get(videoId, Date.now());
+    if (cached !== undefined) return cached;
+    try {
+      const result = embeddabilityFromOEmbedStatus(await fetchOEmbedStatus(buildOEmbedUrl(videoId), OEMBED_TIMEOUT_MS));
+      // Only definite answers are cached: an unknown one is asked again next time
+      if (result !== null) embeddabilityCache.set(videoId, result, Date.now());
+      return result;
+    } catch {
+      return null;
+    }
+  };
+  app.get('/api/innertube/embeddable', async (req, res) => {
+    const ids = parseEmbeddableIds(req.query.ids);
+    if (!ids) {
+      res.status(400).json({ error: 'Expected "ids": 1 to 10 comma-separated YouTube video ids.' });
+      return;
+    }
+    const verdicts = await Promise.all(ids.map(checkEmbeddability));
+    const results: Record<string, Embeddability> = {};
+    ids.forEach((id, i) => {
+      results[id] = verdicts[i];
+    });
+    res.json({ results });
   });
 
   // Unknown API routes must answer with JSON, never with the SPA shell

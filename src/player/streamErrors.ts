@@ -58,20 +58,33 @@ export function isContentRestriction(reason: UnplayableReason): boolean {
   return reason === 'embedDisabled' || reason === 'unavailable' || reason === 'invalidVideo';
 }
 
-/** The notice shown when a song is skipped. Honest about why, never blaming the listener. */
-export function unplayableNotice(title: string, reason: UnplayableReason = 'unknown'): string {
+/**
+ * The notice about a song that cannot be played: honest about why, never blaming the listener.
+ * `outcome`: `skipping` (it failed while playing), `skipped` (it was jumped over without being
+ * loaded) or `none` (a tap on it was refused).
+ */
+export function unplayableNotice(
+  title: string,
+  reason: UnplayableReason = 'unknown',
+  outcome: 'skipping' | 'skipped' | 'none' = 'skipping'
+): string {
+  const suffix = outcome === 'skipping' ? ' Skipping…' : outcome === 'skipped' ? ' Skipped.' : '';
+  return `${unplayableReasonText(title, reason)}${suffix}`;
+}
+
+function unplayableReasonText(title: string, reason: UnplayableReason): string {
   switch (reason) {
     case 'embedDisabled':
-      return `“${title}” can’t be played outside YouTube: its owner turned that off. Skipping…`;
+      return `“${title}” can’t be played outside YouTube: its owner turned that off.`;
     case 'unavailable':
-      return `“${title}” was removed from YouTube or is private. Skipping…`;
+      return `“${title}” was removed from YouTube or is private.`;
     case 'invalidVideo':
-      return `“${title}” has no playable video on YouTube. Skipping…`;
+      return `“${title}” has no playable video on YouTube.`;
     case 'playerError':
-      return `YouTube’s player couldn’t play “${title}”. Skipping…`;
+      return `YouTube’s player couldn’t play “${title}”.`;
     case 'embedderRejected':
-      return `YouTube refused to play “${title}” in this app. Skipping…`;
+      return `YouTube refused to play “${title}” in this app.`;
     default:
-      return `“${title}” can’t be played here. Skipping…`;
+      return `“${title}” can’t be played here.`;
   }
 }

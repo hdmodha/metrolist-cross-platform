@@ -32,3 +32,9 @@ test('every reason has its own honest notice naming the song', () => {
   assert.match(unplayableNotice('Iris', 'unavailable'), /removed|private/);
   assert.equal(unplayableNotice('Iris'), '“Iris” can’t be played here. Skipping…');
 });
+
+test('the notice says whether the song is being skipped, was jumped over, or a tap was refused', () => {
+  assert.equal(unplayableNotice('Iris', 'embedDisabled'), '“Iris” can’t be played outside YouTube: its owner turned that off. Skipping…');
+  assert.equal(unplayableNotice('Iris', 'embedDisabled', 'skipped'), '“Iris” can’t be played outside YouTube: its owner turned that off. Skipped.');
+  assert.equal(unplayableNotice('Iris', 'embedDisabled', 'none'), '“Iris” can’t be played outside YouTube: its owner turned that off.');
+});

@@ -21,7 +21,7 @@ import {
   type RepeatMode,
 } from './queueRules';
 import { canRetryNetwork, computeRetryDelayMs } from './retryPolicy';
-import { unplayableNotice, type UnplayableReason } from './streamErrors';
+import { isContentRestriction, unplayableNotice, type UnplayableReason } from './streamErrors';
 
 /* ------------------------------------------- limits ------------------------------------------ */
 
@@ -96,6 +96,11 @@ export interface PlayerState {
   consecutiveStreamFailures: number;
   /** Video ids tried per track id (the original upload first). */
   triedVideoIdsByTrack: Record<string, string[]>;
+  /**
+   * Songs known to be unplayable this session (every upload tried, or the pre-check found no other
+   * upload): jumped over without being loaded, and a tap on one is refused. Not persisted.
+   */
+  unplayableTracks: Record<string, UnplayableReason>;
   network: { waiting: boolean; retryAttempt: number };
   notice: { id: number; message: string } | null;
   /** Monotonic counter behind notice ids and seek tokens. */
@@ -124,9 +129,17 @@ export type PlayerAction =
   | { type: 'previous'; positionMs: number }
   /** `trackId` guards against a late "ended" event of a song that is no longer playing. */
   | { type: 'trackEnded'; random: number; trackId?: string }
-  /** The song cannot be played (alternate uploads exhausted); `reason` picks the notice. */
-  | { type: 'trackUnplayable'; trackId: string; random: number; reason?: UnplayableReason }
-  | { type: 'alternateVideoFound'; trackId: string; videoId: string; durationMs?: number }
+  /**
+   * The song cannot be played (no other upload works); `reason` picks the notice. The active song is
+   * skipped; any song is remembered as unplayable when `reason` is a content restriction. `videoId`:
+   * the upload the verdict is about (a verdict about an upload the song no longer uses is ignored).
+   */
+  | { type: 'trackUnplayable'; trackId: string; random: number; reason?: UnplayableReason; videoId?: string }
+  /**
+   * Another upload of a song. Without `expectedVideoId` only for the active song (stream error);
+   * with it for any song still on that upload (the pre-check of upcoming songs).
+   */
+  | { type: 'alternateVideoFound'; trackId: string; videoId: string; durationMs?: number; expectedVideoId?: string }
   | { type: 'streamStatusChanged'; status: StreamStatus }
   | { type: 'seekRequested'; ms: number }
   | { type: 'seekHandled'; token?: number }
@@ -317,11 +330,47 @@ function togglePlay(state: PlayerState): PlayerState {
     : { ...state, isPlaying: true, recentlyPlayedIds: recordPlayed(state.recentlyPlayedIds, activeId) };
 }
 
+function isMarkedUnplayable(state: PlayerState, trackId: string): boolean {
+  return hasOwn(state.unplayableTracks, trackId);
+}
+
+/** Spreads the random draws of repeated shuffle picks (golden-ratio steps). */
+const RANDOM_STEP = 0.6180339887;
+
+/** The song after `fromId` in `direction` (hand-queued songs first with shuffle on), or none. */
+function nextCandidate(
+  state: PlayerState,
+  fromId: string,
+  direction: -1 | 1,
+  options: { userInitiated: boolean; repeatMode: RepeatMode; preferQueued: boolean },
+  random: number
+): string | undefined {
+  // Hand-queued songs play first, even with shuffle on
+  if (direction === 1 && state.shuffleEnabled && options.preferQueued) {
+    const queued = new Set(state.userQueuedIds);
+    const fromIdx = state.queueIds.indexOf(fromId);
+    const upcoming = fromIdx === -1 ? state.queueIds : state.queueIds.slice(fromIdx + 1);
+    const firstQueued = upcoming.find((id) => queued.has(id) && !isMarkedUnplayable(state, id));
+    if (firstQueued) return firstQueued;
+  }
+  const nextIndex = pickNextQueueIndex({
+    queueLength: state.queueIds.length,
+    currentIndex: state.queueIds.indexOf(fromId),
+    direction,
+    shuffle: state.shuffleEnabled,
+    repeatMode: options.repeatMode,
+    userInitiated: options.userInitiated,
+    random: () => clampRandom(random),
+  });
+  return nextIndex >= 0 ? state.queueIds[nextIndex] : undefined;
+}
+
 /**
  * Moves through the queue.
  * - `user`:  Next / Previous pressed
  * - `ended`: the current song finished on its own (honours repeat-one / end of queue)
  * - `error`: the current song cannot be played, never land on it again
+ * Songs known to be unplayable are jumped over without being loaded (one notice names the first).
  */
 function skip(
   state: PlayerState,
@@ -332,29 +381,50 @@ function skip(
   const currentId = state.activeTrackId;
   if (currentId === null || !getTrack(state, currentId)) return state;
   const startOptions = { recordHistory: true, userInitiated: reason === 'user' };
-
-  // Hand-queued songs play first, even with shuffle on
+  const userInitiated = reason !== 'ended';
   const repeatsItself = reason === 'ended' && state.repeatMode === 'ONE';
-  if (direction === 1 && state.shuffleEnabled && !repeatsItself) {
-    const queued = new Set(state.userQueuedIds);
-    const firstQueued = upcomingIdsOf(state).find((id) => queued.has(id));
-    if (firstQueued) return startTrack(state, firstQueued, startOptions);
+
+  let nextId = nextCandidate(
+    state,
+    currentId,
+    direction,
+    {
+      userInitiated,
+      repeatMode: reason === 'error' && state.repeatMode === 'ONE' ? 'ALL' : state.repeatMode,
+      preferQueued: !repeatsItself,
+    },
+    random
+  );
+  let jumpedOver: string | null = null;
+  for (let step = 1; nextId && nextId !== currentId && isMarkedUnplayable(state, nextId); step++) {
+    if (step > state.queueIds.length) {
+      nextId = undefined;
+      break;
+    }
+    jumpedOver ??= nextId;
+    nextId = nextCandidate(
+      state,
+      nextId,
+      direction,
+      { userInitiated, repeatMode: state.repeatMode === 'ONE' ? 'ALL' : state.repeatMode, preferQueued: true },
+      (clampRandom(random) + step * RANDOM_STEP) % 1
+    );
   }
 
-  const nextIndex = pickNextQueueIndex({
-    queueLength: state.queueIds.length,
-    currentIndex: state.queueIds.indexOf(currentId),
-    direction,
-    shuffle: state.shuffleEnabled,
-    repeatMode: reason === 'error' && state.repeatMode === 'ONE' ? 'ALL' : state.repeatMode,
-    userInitiated: reason !== 'ended',
-    random: () => clampRandom(random),
-  });
-  const nextId = nextIndex >= 0 ? state.queueIds[nextIndex] : undefined;
+  let next: PlayerState;
+  if (!nextId || (reason === 'error' && nextId === currentId)) next = stopPlayback(state);
+  else if (nextId === currentId) next = restartCurrent(state);
+  else next = startTrack(state, nextId, startOptions);
+  const skippedTrack = jumpedOver ? getTrack(state, jumpedOver) : undefined;
+  if (!skippedTrack || !jumpedOver) return next;
+  return withNotice(next, unplayableNotice(skippedTrack.title, state.unplayableTracks[jumpedOver], 'skipped'));
+}
 
-  if (!nextId || (reason === 'error' && nextId === currentId)) return stopPlayback(state);
-  if (nextId === currentId) return restartCurrent(state);
-  return startTrack(state, nextId, startOptions);
+/** A tap on a song known to be unplayable: say why instead of loading it. */
+function refuseUnplayable(state: PlayerState, trackId: string): PlayerState {
+  const track = getTrack(state, trackId);
+  if (!track) return state;
+  return withNotice(state, unplayableNotice(track.title, state.unplayableTracks[trackId], 'none'));
 }
 
 function previous(state: PlayerState, positionMs: number): PlayerState {
@@ -369,7 +439,7 @@ function previous(state: PlayerState, positionMs: number): PlayerState {
   const history = [...state.playHistory];
   while (history.length > 0) {
     const previousId = history.pop()!;
-    if (previousId === currentId || !getTrack(state, previousId)) continue;
+    if (previousId === currentId || !getTrack(state, previousId) || isMarkedUnplayable(state, previousId)) continue;
     let queueIds = state.queueIds;
     if (!queueIds.includes(previousId)) {
       // A song removed from the queue comes back just before the current one
@@ -414,6 +484,7 @@ function playNow(
   followUps: MetrolistTrack[],
   source: PlaySource | undefined
 ): PlayerState {
+  if (isMarkedUnplayable(state, track.id)) return refuseUnplayable(state, track.id);
   // Tapping the song that is already loaded toggles it instead of restarting it
   if (track.id === state.activeTrackId && getTrack(state, track.id)) return togglePlay(state);
   return startFromList(state, track, followUps, source);
@@ -440,38 +511,50 @@ function shuffleList(
 ): PlayerState {
   const tracks = resolveList(state, context);
   if (tracks.length === 0) return state;
-  const start = tracks[Math.floor(clampRandom(random) * tracks.length)];
+  const playable = tracks.filter((t) => !isMarkedUnplayable(state, t.id));
+  if (playable.length === 0) return refuseUnplayable(withTracks(state, tracks), tracks[0].id);
+  const start = playable[Math.floor(clampRandom(random) * playable.length)];
   const followUps = tracks.filter((t) => t.id !== start.id);
   return startFromList({ ...state, shuffleEnabled: true }, start, followUps, source);
+}
+
+function markUnplayable(state: PlayerState, trackId: string, reason: UnplayableReason | undefined): PlayerState {
+  if (!reason || !isContentRestriction(reason) || state.unplayableTracks[trackId] === reason) return state;
+  return { ...state, unplayableTracks: { ...state.unplayableTracks, [trackId]: reason } };
 }
 
 function trackUnplayable(
   state: PlayerState,
   trackId: string,
   random: number,
-  reason: UnplayableReason | undefined
+  reason: UnplayableReason | undefined,
+  videoId: string | undefined
 ): PlayerState {
   const failed = getTrack(state, trackId);
-  if (!failed || trackId !== state.activeTrackId) return state;
-  const failures = state.consecutiveStreamFailures + 1;
+  if (!failed || (videoId !== undefined && failed.videoId !== videoId)) return state;
+  const marked = markUnplayable(state, trackId, reason);
+  // An upcoming song is only remembered: it is jumped over when it is reached
+  if (trackId !== state.activeTrackId) return marked;
+  const failures = marked.consecutiveStreamFailures + 1;
   if (failures >= MAX_CONSECUTIVE_STREAM_FAILURES) {
     return withNotice(
-      { ...state, isPlaying: false, streamStatus: 'paused', consecutiveStreamFailures: 0 },
+      { ...marked, isPlaying: false, streamStatus: 'paused', consecutiveStreamFailures: 0 },
       'Several songs in a row could not be played. Playback paused.'
     );
   }
-  const skipped = skip({ ...state, consecutiveStreamFailures: failures }, 1, 'error', random);
+  const skipped = skip({ ...marked, consecutiveStreamFailures: failures }, 1, 'error', random);
   return withNotice(skipped, unplayableNotice(failed.title, reason));
 }
 
 function alternateVideoFound(
   state: PlayerState,
-  trackId: string,
-  videoId: string,
-  durationMs: number | undefined
+  action: Extract<PlayerAction, { type: 'alternateVideoFound' }>
 ): PlayerState {
+  const { trackId, videoId, durationMs, expectedVideoId } = action;
   const track = getTrack(state, trackId);
-  if (!track || trackId !== state.activeTrackId || !isValidYouTubeVideoId(videoId)) return state;
+  if (!track || !isValidYouTubeVideoId(videoId)) return state;
+  const isActive = trackId === state.activeTrackId;
+  if (expectedVideoId === undefined ? !isActive : track.videoId !== expectedVideoId) return state;
   const tried = selectTriedVideoIds(state, trackId);
   if (tried.includes(videoId) || tried.length >= MAX_VIDEO_CANDIDATES_PER_TRACK) return state;
   const patched = patchTrack(state, trackId, {
@@ -479,10 +562,13 @@ function alternateVideoFound(
     durationMs:
       durationMs !== undefined && durationMs > PREVIEW_DURATION_MS ? durationMs : track.durationMs,
   });
+  const { [trackId]: _cleared, ...unplayableTracks } = state.unplayableTracks;
+  void _cleared;
   return {
     ...patched,
-    streamStatus: 'loading',
+    streamStatus: isActive && state.isPlaying ? 'loading' : state.streamStatus,
     triedVideoIdsByTrack: { ...state.triedVideoIdsByTrack, [trackId]: [...tried, videoId] },
+    unplayableTracks,
   };
 }
 
@@ -675,6 +761,7 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
       return shuffleList(state, action.context, action.random, action.source);
     case 'playQueueItem':
       if (!state.queueIds.includes(action.trackId) || !getTrack(state, action.trackId)) return state;
+      if (isMarkedUnplayable(state, action.trackId)) return refuseUnplayable(state, action.trackId);
       if (action.trackId === state.activeTrackId) return togglePlay(state);
       return startTrack(state, action.trackId, { recordHistory: true, userInitiated: true });
     case 'togglePlay':
@@ -690,9 +777,9 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
       if (action.trackId !== undefined && action.trackId !== state.activeTrackId) return state;
       return skip(state, 1, 'ended', action.random);
     case 'trackUnplayable':
-      return trackUnplayable(state, action.trackId, action.random, action.reason);
+      return trackUnplayable(state, action.trackId, action.random, action.reason, action.videoId);
     case 'alternateVideoFound':
-      return alternateVideoFound(state, action.trackId, action.videoId, action.durationMs);
+      return alternateVideoFound(state, action);
     case 'streamStatusChanged': {
       if (state.activeTrackId === null) return state;
       if (action.status !== 'playing') {
@@ -867,6 +954,7 @@ function finalize(state: PlayerState): PlayerState {
     ...state,
     tracksById: pickRecords(state.tracksById, referenced),
     triedVideoIdsByTrack: pickRecords(state.triedVideoIdsByTrack, referenced),
+    unplayableTracks: pickRecords(state.unplayableTracks, referenced),
     queueIds,
     likedIds,
     downloadedIds,
@@ -912,6 +1000,7 @@ export function createInitialPlayerState(
     radio: null,
     consecutiveStreamFailures: 0,
     triedVideoIdsByTrack: {},
+    unplayableTracks: {},
     network: { waiting: false, retryAttempt: 0 },
     notice: null,
     seq: 0,
@@ -991,6 +1080,11 @@ export function selectTriedVideoIds(state: PlayerState, trackId: string): string
   const track = getTrack(state, trackId);
   if (!track) return [];
   return hasOwn(state.triedVideoIdsByTrack, trackId) ? state.triedVideoIdsByTrack[trackId] : [track.videoId];
+}
+
+/** Why a song is known to be unplayable this session, or `null`. */
+export function selectUnplayableReason(state: PlayerState, trackId: string): UnplayableReason | null {
+  return hasOwn(state.unplayableTracks, trackId) ? state.unplayableTracks[trackId] : null;
 }
 
 /** Whether another upload of the song may still be tried before calling it unplayable. */

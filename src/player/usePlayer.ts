@@ -9,7 +9,13 @@
  */
 import React from 'react';
 import { STATIC_YTM_FALLBACK } from '../data/fallbackTracks';
-import { fetchRadioContinuation, fetchRecommendations, searchTracks } from '../utils/apiClient';
+import {
+  checkEmbeddable,
+  fetchRadioContinuation,
+  fetchRecommendations,
+  peekEmbeddability,
+  searchTracks,
+} from '../utils/apiClient';
 import {
   fromPersistedState,
   loadPlayerState,
@@ -20,21 +26,26 @@ import {
 import {
   KEYBOARD_SEEK_STEP_MS,
   STALL_BEFORE_WAITING_MS,
+  alternateSearchQuery,
   isPositionSaveDue,
+  planEmbedPrecheck,
   planNetworkRetry,
   planStreamErrorRecovery,
+  selectEmbedCheckTargets,
   shortcutForKey,
   shouldWaitForNetworkAfterStall,
 } from './effectPolicies';
-import { chooseAlternateUpload, rankAlternateUploads } from './alternateUploads';
+import { ALTERNATE_CANDIDATES_TO_CHECK, chooseAlternateUpload, rankAlternateUploads } from './alternateUploads';
 import { createPlaybackClock, type PlaybackClock } from './playbackClock';
 import {
   createInitialPlayerState,
   playerReducer,
   selectActiveTrack,
   selectCanRetryRadio,
+  selectCanTryAlternateVideo,
   selectIsStreamLoading,
   selectRadioContinuationRequest,
+  selectTriedVideoIds,
   type PlaySource,
   type PlayerState,
   type StreamStatus,
@@ -42,6 +53,7 @@ import {
 } from './playerCore';
 import { createPlayerStore, type PlayerStore } from './playerStore';
 import { computeRetryDelayMs } from './retryPolicy';
+import type { UnplayableReason } from './streamErrors';
 
 const NOTICE_DURATION_MS = 4500;
 const SAVE_DEBOUNCE_MS = 400;
@@ -181,6 +193,65 @@ export function usePlayer() {
 
   /* ------------------------------------ stream callbacks ------------------------------------- */
 
+  /* ------------------------------ unplayable uploads --------------------------------------- */
+
+  /**
+   * One search for another upload per song upload (`trackId videoId`), shared by the stream error
+   * recovery and the pre-check, so both never search twice or skip twice. It dispatches the outcome
+   * itself: `alternateVideoFound` (same track id: queue, likes and history stay), or `trackUnplayable`
+   * (the active song is skipped, an upcoming one is remembered and jumped over later).
+   * `failed` (the search itself failed) and `stale` (the song changed meanwhile) dispatch nothing.
+   */
+  const replacementsRef = React.useRef(new Map<string, Promise<'replaced' | 'none' | 'failed' | 'stale'>>());
+  const findReplacementUpload = React.useCallback(
+    (trackId: string, videoId: string, reason: UnplayableReason) => {
+      const key = `${trackId} ${videoId}`;
+      const running = replacementsRef.current.get(key);
+      if (running) return running;
+      const isCurrentUpload = () => store.getState().tracksById[trackId]?.videoId === videoId;
+      const job = (async (): Promise<'replaced' | 'none' | 'failed' | 'stale'> => {
+        const state = store.getState();
+        const track = state.tracksById[trackId];
+        if (!track || track.videoId !== videoId) return 'stale';
+        let chosen = null;
+        if (selectCanTryAlternateVideo(state, trackId)) {
+          let candidates;
+          try {
+            candidates = await searchTracks(alternateSearchQuery(track));
+          } catch {
+            return 'failed';
+          }
+          // Best matches first; the top ones are checked so a known-blocked upload is never chosen
+          const ranked = rankAlternateUploads(track, candidates, selectTriedVideoIds(store.getState(), trackId));
+          await checkEmbeddable(ranked.slice(0, ALTERNATE_CANDIDATES_TO_CHECK).map((r) => r.candidate.videoId));
+          chosen = chooseAlternateUpload(ranked, peekEmbeddability);
+        }
+        if (!isCurrentUpload()) return 'stale';
+        if (
+          chosen &&
+          send({
+            type: 'alternateVideoFound',
+            trackId,
+            videoId: chosen.videoId,
+            durationMs: chosen.durationMs,
+            expectedVideoId: videoId,
+          })
+        ) {
+          return 'replaced';
+        }
+        send({ type: 'trackUnplayable', trackId, random: Math.random(), reason, videoId });
+        return 'none';
+      })();
+      replacementsRef.current.set(key, job);
+      void job.then((outcome) => {
+        // A failed search may be tried again later (e.g. by the stream error recovery)
+        if (outcome === 'failed' || outcome === 'stale') replacementsRef.current.delete(key);
+      });
+      return job;
+    },
+    [send, store]
+  );
+
   /** `trackId videoId` pairs whose player was already re-created once after an error. */
   const retriedStreamsRef = React.useRef(new Set<string>());
 
@@ -194,7 +265,7 @@ export function usePlayer() {
         online,
         retried: retriedStreamsRef.current.has(retryKey),
       });
-      if (!plan) return;
+      if (!plan || !current) return;
       if (plan.kind === 'waitForNetwork') {
         send({ type: 'networkLost' });
         return;
@@ -206,37 +277,52 @@ export function usePlayer() {
         return;
       }
       if (plan.kind === 'findAlternate') {
-        try {
-          // Some uploads cannot be played outside youtube.com: look for another upload of the song
-          const track = selectActiveTrack(store.getState());
-          const candidates = await searchTracks(plan.query);
-          const alternate = track
-            ? chooseAlternateUpload(rankAlternateUploads(track, candidates, plan.tried), () => undefined)
-            : null;
-          if (store.getState().activeTrackId !== plan.trackId) return;
-          if (
-            alternate &&
-            send({
-              type: 'alternateVideoFound',
-              trackId: plan.trackId,
-              videoId: alternate.videoId,
-              durationMs: alternate.durationMs,
-            })
-          ) {
-            return;
-          }
-        } catch {
-          if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-            send({ type: 'networkLost' });
-            return;
-          }
+        // Some uploads cannot be played outside youtube.com: look for another upload of the song
+        const outcome = await findReplacementUpload(plan.trackId, plan.videoId, plan.reason);
+        if (outcome !== 'failed' || store.getState().activeTrackId !== plan.trackId) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          send({ type: 'networkLost' });
+          return;
         }
-        if (store.getState().activeTrackId !== plan.trackId) return;
       }
-      send({ type: 'trackUnplayable', trackId: plan.trackId, random: Math.random(), reason: plan.reason });
+      send({ type: 'trackUnplayable', trackId: plan.trackId, random: Math.random(), reason: plan.reason, videoId: current.videoId });
     },
-    [reinitStream, send, store]
+    [findReplacementUpload, reinitStream, send, store]
   );
+
+  /*
+   * Embeddability pre-check: the active song and the next 3 are checked (YouTube's oEmbed) as soon
+   * as the queue changes, so an upload its owner keeps off other apps is replaced BEFORE it is
+   * reached. No React state: the result only feeds the store (no extra renders).
+   */
+  const pendingEmbedChecksRef = React.useRef(new Set<string>());
+  const precheckedRef = React.useRef(new Set<string>());
+  const runEmbedPrecheckRef = React.useRef<() => void>(() => {});
+  runEmbedPrecheckRef.current = () => {
+    const plan = planEmbedPrecheck(
+      selectEmbedCheckTargets(store.getState()),
+      peekEmbeddability,
+      pendingEmbedChecksRef.current
+    );
+    for (const target of plan.blocked) {
+      const key = `${target.trackId} ${target.videoId}`;
+      if (precheckedRef.current.has(key)) continue;
+      precheckedRef.current.add(key);
+      void findReplacementUpload(target.trackId, target.videoId, 'embedDisabled');
+    }
+    if (plan.check.length === 0) return;
+    for (const id of plan.check) pendingEmbedChecksRef.current.add(id);
+    void checkEmbeddable(plan.check).finally(() => {
+      for (const id of plan.check) pendingEmbedChecksRef.current.delete(id);
+      runEmbedPrecheckRef.current();
+    });
+  };
+  const embedCheckKey = selectEmbedCheckTargets(state)
+    .map((target) => `${target.trackId}=${target.videoId}`)
+    .join(' ');
+  React.useEffect(() => {
+    if (embedCheckKey) runEmbedPrecheckRef.current();
+  }, [embedCheckKey]);
 
   const streamCallbacks = React.useMemo(
     () => ({

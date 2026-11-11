@@ -240,6 +240,62 @@ describe('upstream retry', () => {
   });
 });
 
+describe('embeddability check (oEmbed)', () => {
+  test('answers true / false / null per id, asking only the fixed youtube.com oEmbed URL', async () => {
+    const asked: string[] = [];
+    const statusById: Record<string, number> = { DrLaoBKGS3g: 401, Z7MIQJluULU: 403, b1kbLwvqugk: 200, gdZLi9oWNZg: 500 };
+    const server = await start({
+      mode: 'web',
+      oEmbedStatus: async (url, timeoutMs) => {
+        assert.equal(url.origin, 'https://www.youtube.com');
+        assert.equal(url.pathname, '/oembed');
+        assert.ok(timeoutMs > 0 && timeoutMs <= 5000);
+        asked.push(url.href);
+        const id = new URL(url.searchParams.get('url') ?? '').searchParams.get('v') ?? '';
+        if (id === 'kJQP7kiw5Fk') throw new Error('timeout');
+        return statusById[id] ?? 404;
+      },
+    });
+    try {
+      const reply = await request(server.port, '/api/innertube/embeddable?ids=DrLaoBKGS3g,Z7MIQJluULU,b1kbLwvqugk,gdZLi9oWNZg,kJQP7kiw5Fk');
+      assert.equal(reply.status, 200);
+      assert.equal(reply.headers['access-control-allow-origin'], '*');
+      assert.deepEqual(JSON.parse(reply.body), {
+        results: { DrLaoBKGS3g: false, Z7MIQJluULU: false, b1kbLwvqugk: true, gdZLi9oWNZg: null, kJQP7kiw5Fk: null },
+      });
+      assert.equal(asked.length, 5);
+
+      // Definite answers are cached; unknown ones are asked again
+      await request(server.port, '/api/innertube/embeddable?ids=DrLaoBKGS3g,b1kbLwvqugk,gdZLi9oWNZg');
+      assert.equal(asked.length, 6);
+      assert.ok(asked[5].includes('gdZLi9oWNZg'));
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('rejects a missing, malformed or too long id list without asking YouTube', async () => {
+    let asked = 0;
+    const server = await start({
+      mode: 'desktop',
+      oEmbedStatus: async () => {
+        asked++;
+        return 200;
+      },
+    });
+    try {
+      const eleven = Array.from({ length: 11 }, (_, i) => `video${String(i).padStart(6, '0')}`).join(',');
+      for (const query of ['', '?ids=', '?ids=abc', '?ids=DrLaoBKGS3g,%3Cscript%3E', `?ids=${eleven}`, '?ids=DrLaoBKGS3g&ids=b1kbLwvqugk']) {
+        const reply = await request(server.port, `/api/innertube/embeddable${query}`);
+        assert.equal(reply.status, 400, query);
+      }
+      assert.equal(asked, 0);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe('rate limiting', () => {
   for (const mode of ['web', 'desktop'] as const) {
     test(`${mode}: the limiter covers API, static files and the SPA fallback`, async () => {

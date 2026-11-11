@@ -1,7 +1,7 @@
 /**
  * Shared Playwright fixture. Every test is hermetic:
- * - `/api/innertube/search` and `/api/innertube/recommendations` are answered from deterministic
- *   fixtures (each test may swap the handlers through `api`),
+ * - `/api/innertube/search`, `/api/innertube/recommendations` and `/api/innertube/embeddable` are
+ *   answered from deterministic fixtures (each test may swap the handlers through `api`),
  * - `https://www.youtube.com/iframe_api` is the fake player (`fakeYouTube.ts`),
  * - artwork hosts get a tiny in-memory PNG, Google Fonts an empty stylesheet,
  * - ANY other external request is aborted and fails the test (an accidental live call is loud).
@@ -32,8 +32,12 @@ export interface RadioRequest {
 export interface MockApi {
   search: (query: string) => ApiReply<{ tracks: InnerTubeParsedTrack[] }>;
   recommendations: (request: RadioRequest) => ApiReply<RecommendationsBody>;
+  /** oEmbed verdict per video id (`/api/innertube/embeddable`); default: every video embeds. */
+  embeddable: (videoId: string) => boolean | null;
   readonly searches: string[];
   readonly radioRequests: RadioRequest[];
+  /** Every video id the app asked the embeddability check about. */
+  readonly embeddableChecks: string[];
 }
 
 /** 1x1 transparent PNG. */
@@ -47,7 +51,14 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 const YOUTUBE_API = 'https://www.youtube.com/iframe_api';
 
 export function createMockApi(): MockApi {
-  return { search: defaultSearch, recommendations: defaultRecommendations, searches: [], radioRequests: [] };
+  return {
+    search: defaultSearch,
+    recommendations: defaultRecommendations,
+    embeddable: () => true,
+    searches: [],
+    radioRequests: [],
+    embeddableChecks: [],
+  };
 }
 
 export function defaultSearch(query: string): ApiReply<{ tracks: InnerTubeParsedTrack[] }> {
@@ -88,6 +99,13 @@ export async function installRoutes(target: Pick<BrowserContext, 'route'>, api: 
         };
         (api.radioRequests as RadioRequest[]).push(request);
         return fulfillApi(route, api.recommendations(request));
+      }
+      if (url.pathname === '/api/innertube/embeddable') {
+        const ids = (url.searchParams.get('ids') ?? '').split(',').filter(Boolean);
+        (api.embeddableChecks as string[]).push(...ids);
+        const results: Record<string, boolean | null> = {};
+        for (const id of ids) results[id] = api.embeddable(id);
+        return route.fulfill({ json: { results } });
       }
       return route.continue();
     }
@@ -320,6 +338,11 @@ export class MetrolistApp {
 
   async ytState(): Promise<number | null> {
     return (await this.yt())?.state ?? null;
+  }
+
+  /** Every video id any fake player was created with, loaded or cued, in order. */
+  ytLoadedVideoIds(): Promise<string[]> {
+    return this.page.evaluate(() => (window as unknown as { __yt?: { loaded?: string[] } }).__yt?.loaded ?? []);
   }
 
   ytInstanceCount(): Promise<number> {

@@ -10,7 +10,7 @@ import { expect, test } from './fixtures/test';
 interface NativeRequest {
   url: string;
   method: string;
-  data: { query?: string; params?: string; videoId?: string; continuation?: string };
+  data?: { query?: string; params?: string; videoId?: string; continuation?: string };
 }
 
 test.use({ baseURL: `http://localhost:${STATIC_PORT}` });
@@ -29,11 +29,15 @@ test.describe('packaged app without a backend', () => {
       expect(`${plugin}.${method}`).toBe('CapacitorHttp.request');
       calls.push(options);
       const endpoint = new URL(options.url).pathname;
+      if (options.url.startsWith('https://www.youtube.com/oembed?')) {
+        expect(options.method).toBe('GET');
+        return { status: 200, data: { title: 'fixture' } };
+      }
       if (endpoint === '/youtubei/v1/search') {
-        return { status: 200, data: innerTubeSearchJson(searchResultsFor(options.data.query ?? '')) };
+        return { status: 200, data: innerTubeSearchJson(searchResultsFor(options.data?.query ?? '')) };
       }
       if (endpoint === '/youtubei/v1/next') {
-        return { status: 200, data: innerTubeNextJson(RADIO_SEED, options.data.continuation) };
+        return { status: 200, data: innerTubeNextJson(RADIO_SEED, options.data?.continuation) };
       }
       return { status: 404, data: {} };
     });
@@ -61,13 +65,15 @@ test.describe('packaged app without a backend', () => {
     await expect.poll(() => app.ytState()).toBe(1);
     await app.openQueue();
     await expect.poll(async () => (await app.upcomingTitles()).length).toBe(10);
-    expect(calls.some((c) => c.url.includes('/youtubei/v1/next') && !c.data.continuation)).toBe(true);
+    expect(calls.some((c) => c.url.includes('/youtubei/v1/next') && !c.data?.continuation)).toBe(true);
 
     // Jump near the end of the radio: the next page is fetched with its continuation token
     await app.queue.locator('ul[aria-label="Next up"] button[aria-label^="Play "]').nth(6).click();
-    await expect.poll(() => calls.filter((c) => c.url.includes('/youtubei/v1/next') && !!c.data.continuation).length).toBeGreaterThan(0);
+    await expect.poll(() => calls.filter((c) => c.url.includes('/youtubei/v1/next') && !!c.data?.continuation).length).toBeGreaterThan(0);
     await expect.poll(async () => (await app.upcomingTitles()).filter((t) => / P2-/.test(t)).length).toBeGreaterThan(0);
 
+    // The embeddability pre-check asks YouTube's oEmbed directly too
+    expect(calls.some((c) => c.method === 'GET' && c.url.startsWith('https://www.youtube.com/oembed?format=json&url='))).toBe(true);
     expect(apiCalls, 'no request is wasted on a backend that is not there').toEqual([]);
   });
 });

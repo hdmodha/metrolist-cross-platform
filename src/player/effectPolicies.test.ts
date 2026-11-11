@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import { createInitialPlayerState, playerReducer, type PlayerState } from './playerCore';
 import {
+  EMBED_PRECHECK_UPCOMING,
   KEYBOARD_SEEK_STEP_MS,
+  planEmbedPrecheck,
+  selectEmbedCheckTargets,
   STALL_BEFORE_WAITING_MS,
   STREAM_ERROR_API_UNAVAILABLE,
   planNetworkRetry,
@@ -89,6 +92,48 @@ describe('stream error recovery', () => {
 
   test('nothing to do without an active track', () => {
     assert.equal(planStreamErrorRecovery(createInitialPlayerState(), online(150)), null);
+  });
+});
+
+describe('embeddability pre-check', () => {
+  const queueOf = (...names: string[]) => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'playFromSearch', track: yt(names[0]) });
+    for (const name of names.slice(1)) state = playerReducer(state, { type: 'addToQueue', track: yt(name) });
+    return state;
+  };
+  const ref = (name: string) => ({ trackId: `ytm-${vid(name)}`, videoId: vid(name) });
+
+  test('checks the active song and the next 3 upcoming ones, in play order', () => {
+    const state = queueOf('a', 'b', 'c', 'd', 'e', 'f');
+    assert.equal(EMBED_PRECHECK_UPCOMING, 3);
+    assert.deepEqual(selectEmbedCheckTargets(state), [ref('a'), ref('b'), ref('c'), ref('d')]);
+    assert.deepEqual(selectEmbedCheckTargets(createInitialPlayerState()), []);
+  });
+
+  test('songs already known to be unplayable are not checked again; the current upload is what counts', () => {
+    let state = queueOf('a', 'b', 'c', 'd', 'e');
+    state = playerReducer(state, { type: 'trackUnplayable', trackId: `ytm-${vid('b')}`, random: 0, reason: 'embedDisabled', videoId: vid('b') });
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: `ytm-${vid('c')}`, videoId: vid('c2'), expectedVideoId: vid('c') });
+    assert.deepEqual(selectEmbedCheckTargets(state), [ref('a'), { trackId: `ytm-${vid('c')}`, videoId: vid('c2') }, ref('d'), ref('e')]);
+  });
+
+  test('with shuffle on, hand-queued songs (which play first) are checked first', () => {
+    let state = playerReducer(createInitialPlayerState(), {
+      type: 'playFromList',
+      track: yt('a'),
+      context: [yt('a'), yt('b'), yt('c'), yt('d'), yt('e')],
+    });
+    state = playerReducer(state, { type: 'toggleShuffle' });
+    state = playerReducer(state, { type: 'addToQueue', track: yt('q') });
+    assert.deepEqual(selectEmbedCheckTargets(state)[1], ref('q'));
+  });
+
+  test('asks only about uploads never checked and not in flight; reports the ones known to be blocked', () => {
+    const targets = [ref('a'), ref('b'), ref('c'), ref('d')];
+    const known: Record<string, boolean | null> = { [vid('a')]: true, [vid('b')]: false, [vid('c')]: null };
+    const plan = planEmbedPrecheck(targets, (id) => (id in known ? known[id] : undefined), new Set());
+    assert.deepEqual(plan, { check: [vid('d')], blocked: [ref('b')] });
+    assert.deepEqual(planEmbedPrecheck(targets, (id) => (id in known ? known[id] : undefined), new Set([vid('d')])).check, []);
   });
 });
 

@@ -6,6 +6,7 @@
  * the app loads with `FakeYouTubeOptions`):
  * - `current().__debug()` → `{ state, time, videoId, destroyed }` of the newest player
  * - `instances` → every player ever created (a re-created stream shows up as a new instance)
+ * - `loaded` → every video id a player was created with, loaded or cued
  * - `__userTap()` (a tap on the revealed player), `__externalPause()` (OS media key), `__stall()` (buffering forever)
  */
 
@@ -39,6 +40,8 @@ export interface FakePlayer {
 
 export interface FakeYouTubeControl extends Required<FakeYouTubeOptions> {
   instances: FakePlayer[];
+  /** Every video id a player was created with, loaded or cued, in order. */
+  loaded: string[];
   current: () => FakePlayer | undefined;
 }
 
@@ -61,6 +64,7 @@ export function installFakeYouTubeApi(): void {
   };
   const ctl = (w.__yt = w.__yt || {}) as FakeYouTubeControl;
   ctl.instances = [];
+  ctl.loaded = [];
   ctl.speed = ctl.speed || 1;
   ctl.blocked = !!ctl.blocked;
   ctl.errorIds = ctl.errorIds || [];
@@ -71,6 +75,7 @@ export function installFakeYouTubeApi(): void {
     let state = -1;
     let time = (opts.playerVars && Number(opts.playerVars.start)) || 0;
     let videoId = opts.videoId;
+    ctl.loaded.push(videoId);
     let destroyed = false;
     let stalled = false;
     const iframe = document.createElement('iframe');
@@ -101,12 +106,14 @@ export function installFakeYouTubeApi(): void {
         : [String(id), Number(startSeconds) || 0];
     self.loadVideoById = (id: unknown, startSeconds?: number) => {
       [videoId, time] = readArgs(id, startSeconds);
+      ctl.loaded.push(videoId);
       stalled = false;
       setState(-1);
       setTimeout(start, 30);
     };
     self.cueVideoById = (id: unknown, startSeconds?: number) => {
       [videoId, time] = readArgs(id, startSeconds);
+      ctl.loaded.push(videoId);
       setState(5);
     };
     self.playVideo = () => {

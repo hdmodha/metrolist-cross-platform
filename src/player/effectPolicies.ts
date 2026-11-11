@@ -4,10 +4,13 @@
  * which keys are shortcuts.
  */
 import { deriveSongSearchTerms } from '../utils/metrolistCore';
+import type { Embeddability } from '../utils/embeddability';
 import {
   selectActiveTrack,
   selectCanTryAlternateVideo,
   selectTriedVideoIds,
+  selectUnplayableReason,
+  selectUpcomingIds,
   type PlayerState,
   type StreamStatus,
 } from './playerCore';
@@ -56,6 +59,59 @@ export function planStreamErrorRecovery(
     tried: selectTriedVideoIds(state, track.id),
     reason,
   };
+}
+
+/** Upcoming songs whose upload is checked ahead of time, besides the active one. */
+export const EMBED_PRECHECK_UPCOMING = 3;
+
+/** One song's current upload. */
+export interface UploadRef {
+  trackId: string;
+  videoId: string;
+}
+
+/**
+ * The uploads to check before they are reached: the active song, then the next 3 upcoming songs in
+ * play order (with shuffle on, hand-queued songs first: they play first). Songs already known to be
+ * unplayable are left out.
+ */
+export function selectEmbedCheckTargets(state: PlayerState, upcomingCount = EMBED_PRECHECK_UPCOMING): UploadRef[] {
+  const active = selectActiveTrack(state);
+  if (!active) return [];
+  let upcoming = selectUpcomingIds(state);
+  if (state.shuffleEnabled) {
+    const queued = new Set(state.userQueuedIds);
+    upcoming = [...upcoming.filter((id) => queued.has(id)), ...upcoming.filter((id) => !queued.has(id))];
+  }
+  const targets: UploadRef[] = [{ trackId: active.id, videoId: active.videoId }];
+  for (const id of upcoming) {
+    if (targets.length > upcomingCount) break;
+    const track = state.tracksById[id];
+    if (!track || selectUnplayableReason(state, id) !== null) continue;
+    targets.push({ trackId: id, videoId: track.videoId });
+  }
+  return targets;
+}
+
+/**
+ * `check`: uploads never checked and not being checked; `blocked`: targets known not to be
+ * embeddable (their song needs another upload). `null` (inconclusive) counts as playable.
+ */
+export function planEmbedPrecheck(
+  targets: readonly UploadRef[],
+  known: (videoId: string) => Embeddability | undefined,
+  pending: ReadonlySet<string>
+): { check: string[]; blocked: UploadRef[] } {
+  const check: string[] = [];
+  const blocked: UploadRef[] = [];
+  for (const target of targets) {
+    const verdict = known(target.videoId);
+    if (verdict === false) blocked.push(target);
+    else if (verdict === undefined && !pending.has(target.videoId) && !check.includes(target.videoId)) {
+      check.push(target.videoId);
+    }
+  }
+  return { check, blocked };
 }
 
 /** How long a stream may sit in loading / buffering while offline before we wait for the network. */
