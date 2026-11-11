@@ -28,6 +28,9 @@ xvfb-run -a npm run test:electron          # macOS / Windows: npm run test:elect
 NODE_ENV=production PORT=3077 timeout 8 npx tsx server.ts
 PORT=3078 timeout 8 npm start              # bundled dist-server/server.mjs
 
+# 6b. After editing src/shared/adBlock.ts: regenerate the Android copy of the rules (a unit test fails while it is stale)
+npm run adblock:rules
+
 # 7. Dependencies: must report 0 vulnerabilities (and the minimatch override must hold)
 npm audit
 npm ls minimatch
@@ -55,8 +58,8 @@ npx @electron/asar list release/linux-unpacked/resources/app.asar               
 ### Priority 1: Verify the Standalone Mobile App on Real Devices
 - The packaged Android / iOS app calls YouTube Music directly through Capacitor's native HTTP bridge (`src/utils/apiClient.ts`) and relies on the hash router for the hardware Back button. Both were verified against simulated environments only: test a real APK / iOS build.
 
-### Priority 2: Direct Audio Streams (Background Play, Real Downloads)
-- `src/components/YouTubeStreamBridge.tsx` plays through a hidden YouTube IFrame. Mobile WebViews may throttle it in the background, and the audio cannot be stored. A direct `<audio>` stream path (keeping the bridge as a fallback) would allow background playback and real offline Downloads.
+### Priority 2: Android Background Play and Ad Blocking (Brave-style)
+- `src/components/YouTubeStreamBridge.tsx` plays through a hidden YouTube IFrame, and that stays (decided): do NOT call `youtubei/v1/player`, impersonate YouTube's app clients to get raw `googlevideo.com` URLs, decipher signatures or generate PO / BotGuard tokens. Mobile WebViews may throttle the IFrame in the background; the next phase keeps it playing from the Android shell (a media-playback foreground service / WebView settings) and applies the shared ad-block rules (`src/shared/adBlockRules.json`) to the WebView's requests, like the desktop app does (`electron/adBlocker.ts`).
 
 ### Priority 3: Playlists
 - The library has Liked Songs, Downloads and Recently played (`likedIds`, `downloadedIds`, `recentlyPlayedIds` in the player core, persisted in `metrolist.player.v2`). User playlists would follow the same pattern: an ordered id list in the reducer, a v3 persistence shape with a migration test, and a page under `#/library/…`.
@@ -68,5 +71,6 @@ npx @electron/asar list release/linux-unpacked/resources/app.asar               
 - **Never remove `express-rate-limit` from `src/server/createServer.ts`**: CodeQL rule `js/missing-rate-limiting` requires `rateLimit(...)` from `express-rate-limit` on routes serving files.
 - **Never relax the desktop server**: desktop mode binds 127.0.0.1 only, sends no CORS headers and checks `Host` (DNS rebinding). Keep the Electron window hardening in `electron/security.ts`.
 - **Never pass raw string URLs with user query params to `fetch()` in the server**: Always use `new URL(...)` + `.searchParams.set(...)` + explicit `url.origin` verification to satisfy CodeQL rule `js/request-forgery`.
-- **Never introduce super-linear regexes in `src/utils/metrolistCore.ts`**: Use linear $O(N)$ string scanning to satisfy CodeQL rule `js/polynomial-redos`.
+- **Ad-block rules stay conservative** (`src/shared/adBlock.ts`): never block what playback needs (the never-block list: `googlevideo.com`, `ytimg.com`, `/iframe_api`, `/s/player/`, `/embed/`, `/youtubei/v1/player`, `/youtubei/v1/next`, `/api/stats/playback`, `/api/stats/watchtime`, …); every rule says why it is safe.
+- **Never introduce super-linear regexes in `src/utils/metrolistCore.ts`** (nor in `src/player/alternateUploads.ts` or `src/shared/adBlock.ts`): Use linear $O(N)$ string scanning to satisfy CodeQL rule `js/polynomial-redos`.
 - **Keep `vite >= 6.4.6` and `esbuild >= 0.25.0` in `package.json`**: Required to keep GitHub Dependabot at 0 alerts.

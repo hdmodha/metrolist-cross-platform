@@ -56,7 +56,9 @@ Uninstalling keeps this folder; delete it to start fresh. The library belongs to
 - **Search**: live YouTube Music search as you type, recent searches, and a Browse grid of genres and moods.
 - **Library**: Liked Songs and Downloads (newest first, with Play and Shuffle) and your recently played songs.
 - **Mini player → Now Playing**: the playing song is docked above the tabs; tap it for a full-screen player with large artwork, seek bar, shuffle / repeat, the "⋮" menu and the Up next queue (reorder, remove, clear). Close it with the chevron, Escape, Back or a swipe down.
-- **Full-length, ad-free streaming** through YouTube Music, with **endless radio**: "Autoplay similar songs" keeps the music going with YouTube Music's own recommendations (`RDAMVM`) when your queue runs low, without ever dropping songs you queued.
+- **Full-length streaming** through YouTube Music (ad and tracking requests blocked in the desktop app, see below), with **endless radio**: "Autoplay similar songs" keeps the music going with YouTube Music's own recommendations (`RDAMVM`) when your queue runs low, without ever dropping songs you queued.
+- **Fewer unplayable songs**: some uploads can't be played outside youtube.com (their owner turned that off). The app checks the playing song and the next three with YouTube's public oEmbed endpoint and swaps a blocked upload for another upload of the same song *before* it is reached — scored on title, artist and length, never a cover, remix, live or sped-up version, and never anything that does not match well enough. A song with no good upload is skipped without being loaded, with a notice that says why; player errors get their own honest messages (removed or private, the owner's choice, a player error that is retried once, …).
+- **Ad blocking (desktop app)**: like Brave, the desktop app cancels the YouTube player's ad and tracking requests (DoubleClick, Google ad / analytics hosts, YouTube's ad and telemetry endpoints) while the video itself plays through the official YouTube player. See [Ad blocking per platform](#ad-blocking-per-platform).
 - **Downloads, honestly**: "Download" adds a song to your Downloads list; the audio is not stored on the device, so those songs still need an internet connection to play.
 - **Remembers you**: liked songs, downloads, history, recent searches, the queue (resumed paused where you left off), volume and preferences are saved on the device. Data from older versions is upgraded automatically.
 - **Native OS media keys (`MediaSession API`)**: macOS Control Center, Windows media controls, iOS Lock Screen and Android media notifications; Space / ← / → on desktop.
@@ -68,6 +70,16 @@ Uninstalling keeps this folder; delete it to start fresh. The library belongs to
 - **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages).
 - **Desktop app (Electron)**: the same app in its own window; the server runs inside the app on `127.0.0.1` only. Closing the window on macOS keeps the music playing (Cmd+Q quits); media keys work through the OS media controls.
 - **Web / portable bundle**: talk to the bundled Express server (`dist-server/server.mjs`, built from `server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
+
+### Ad blocking per platform
+
+Playback always uses the official YouTube IFrame player. What differs is who controls the network:
+
+| Platform | Ads and tracking |
+|---|---|
+| **Desktop app** (macOS, Windows, Linux) | Blocked by the app: every request (the YouTube player's included) is checked against a conservative list in `src/shared/adBlock.ts` and ad / tracking requests are cancelled. Video streams, artwork, the player scripts and playback statistics are never blocked. |
+| **Web browser** (any build served to a browser) | The app cannot block requests the YouTube player makes from its own frame (browsers do not let a page block another site's requests). Use your browser's blocker: Brave Shields, uBlock Origin, or your browser's built-in protection. |
+| **Android / iOS app** | Not yet: the next release reuses the same rules (`src/shared/adBlockRules.json`, generated with `npm run adblock:rules`). |
 
 ---
 
