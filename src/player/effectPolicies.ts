@@ -27,9 +27,13 @@ export type StreamErrorPlan =
   | { kind: 'findAlternate'; trackId: string; videoId: string; query: string; tried: string[]; reason: UnplayableReason }
   | { kind: 'skip'; trackId: string; reason: UnplayableReason };
 
-/** The search query for other uploads of a song. */
+/**
+ * The search query for other uploads of a song: "<artist> <title>", or the title alone when it is an
+ * "A - B" title whose A is not the uploader (a re-upload: its uploader's name would spoil the search).
+ */
 export function alternateSearchQuery(track: { title: string; artist: string }): string {
   const terms = deriveSongSearchTerms(track.title, track.artist);
+  if (terms.trackName.includes(' - ')) return terms.trackName;
   return `${terms.artistName} ${terms.trackName}`.trim();
 }
 

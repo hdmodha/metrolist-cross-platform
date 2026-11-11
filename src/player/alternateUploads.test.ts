@@ -38,6 +38,7 @@ describe('scoring another upload of the same song', () => {
       'Blinding Lights (Piano Cover)',
       'Blinding Lights (Karaoke Version)',
       'Blinding Lights (Remix)',
+      'Blinding Lights remake',
       'Blinding Lights (slowed + reverb)',
       'Blinding Lights - sped up',
       'Blinding Lights (Nightcore)',
@@ -56,6 +57,12 @@ describe('scoring another upload of the same song', () => {
     const remix = { title: 'Blinding Lights (Chromatics Remix)', artist: 'The Weeknd', durationMs: 290000 };
     const score = scoreAlternateUpload(remix, candidate('The Weeknd - Blinding Lights (Chromatics Remix)', 'The Weeknd', 291000));
     assert.ok(score !== null && score >= MIN_ALTERNATE_SCORE, `remix scored ${score}`);
+    // ... and the other way round: a karaoke / remix track is not replaced by the original recording
+    const karaoke = { title: 'Adele - Hello (Acoustic Karaoke)', artist: 'Sing2Guitar | Acoustic Karaoke', durationMs: 298000 };
+    const vocal = scoreAlternateUpload(karaoke, candidate('Adele - Hello (Lyrics)', 'Rare Vibes', 290000));
+    assert.ok(vocal === null || vocal < MIN_ALTERNATE_SCORE, `the vocal version scored ${vocal}`);
+    const plain = scoreAlternateUpload(remix, candidate('The Weeknd - Blinding Lights', 'The Weeknd', 290000));
+    assert.ok(plain === null || plain < MIN_ALTERNATE_SCORE, `the original mix scored ${plain}`);
     // "Live" in the song title itself ("Live Forever") is not a live recording
     const oasis = { title: 'Live Forever', artist: 'Oasis', durationMs: 276000 };
     const forever = scoreAlternateUpload(oasis, candidate('Oasis - Live Forever (Official Video)', 'Oasis', 280000));
@@ -84,6 +91,35 @@ describe('scoring another upload of the same song', () => {
     const original = { title: 'Kavinsky - Nightcall (Official Audio)', artist: 'Record Makers', durationMs: 258000 };
     const topic = scoreAlternateUpload(original, candidate('Nightcall', 'Kavinsky - Topic', 258000));
     assert.ok(topic !== null && topic >= 90, `topic scored ${topic}`);
+  });
+
+  test('the same title by an uploader that does not name the artist is not enough (an unlabelled cover)', () => {
+    const coldplay = { title: 'Yellow', artist: 'Coldplay', durationMs: 273000 };
+    const cover = scoreAlternateUpload(coldplay, candidate('Yellow', 'Daniel Jang', 273000));
+    assert.ok(cover === null || cover < MIN_ALTERNATE_SCORE, `cover scored ${cover}`);
+    const swapped = scoreAlternateUpload(coldplay, candidate('Yellow - Daniel Jang', 'Daniel Jang', 273000));
+    assert.ok(swapped === null || swapped < MIN_ALTERNATE_SCORE, `swapped scored ${swapped}`);
+  });
+
+  test('two re-uploads naming the same "Artist - Title" match each other, in either order', () => {
+    const reupload = { title: 'The Weeknd - Blinding Lights', artist: 'David Dean Burkhart', durationMs: 203000 };
+    for (const title of ['The Weeknd - Blinding Lights (Lyrics)', 'Blinding Lights - The Weeknd (Lyrics)']) {
+      const score = scoreAlternateUpload(reupload, candidate(title, '7clouds', 201000));
+      assert.ok(score !== null && score >= 90, `${title} scored ${score}`);
+    }
+  });
+
+  test('TV performances, dance practices and fancams are other recordings', () => {
+    const bts = { title: 'Dynamite', artist: 'BTS', durationMs: 224000 };
+    for (const title of [
+      'BTS(방탄소년단) - Dynamite (2020 KBS Song Festival) I KBS WORLD TV 201218',
+      'BTS (방탄소년단) - Dynamite Dance Practice (Mirrored)',
+      'BTS - Dynamite @ MMA 2020 Performance',
+      '[FANCAM] BTS Dynamite',
+    ]) {
+      const score = scoreAlternateUpload(bts, candidate(title, 'KBS WORLD TV', 230000));
+      assert.ok(score === null || score < MIN_ALTERNATE_SCORE, `${title} scored ${score}`);
+    }
   });
 
   test('non-Latin titles are compared too', () => {

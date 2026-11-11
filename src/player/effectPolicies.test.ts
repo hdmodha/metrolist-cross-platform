@@ -4,6 +4,7 @@ import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import { createInitialPlayerState, playerReducer, type PlayerState } from './playerCore';
 import {
   EMBED_PRECHECK_UPCOMING,
+  alternateSearchQuery,
   KEYBOARD_SEEK_STEP_MS,
   planEmbedPrecheck,
   selectEmbedCheckTargets,
@@ -135,6 +136,13 @@ describe('embeddability pre-check', () => {
     assert.deepEqual(plan, { check: [vid('d')], blocked: [ref('b')] });
     assert.deepEqual(planEmbedPrecheck(targets, (id) => (id in known ? known[id] : undefined), new Set([vid('d')])).check, []);
   });
+});
+
+test('the search for other uploads names the artist, or uses an "A - B" title as it is', () => {
+  assert.equal(alternateSearchQuery({ title: 'Nightcall', artist: 'Kavinsky' }), 'Kavinsky Nightcall');
+  assert.equal(alternateSearchQuery({ title: 'Kavinsky - Nightcall (Official Audio)', artist: 'Kavinsky VEVO' }), 'Kavinsky Nightcall');
+  // A re-upload by someone else: the uploader's name would only spoil the search
+  assert.equal(alternateSearchQuery({ title: 'The Weeknd - Blinding Lights', artist: 'David Dean Burkhart' }), 'The Weeknd - Blinding Lights');
 });
 
 test('the position is saved at most every 5 seconds', () => {

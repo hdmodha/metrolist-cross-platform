@@ -5,21 +5,24 @@
  *
  * A search for "<artist> <title>" returns the song, but also covers, remixes, "slowed + reverb"
  * edits, karaoke tracks, hour-long loops and other songs of the artist. Each candidate is scored:
- * - title similarity (token overlap of the titles without brackets and artist names): up to 55,
+ * - title similarity (token overlap of the titles without brackets and artist names): up to 45,
  *   and below half the tokens in common the candidate is not the same song at all;
- * - the artist: the uploader, or the "Artist - Title" prefix, names the original's artist: 20;
+ * - the artist: 30 when the uploader, a side of an "Artist - Title" title, or the title itself names
+ *   the original's artist (or both titles are the same "A - B" pair). Without it a candidate cannot
+ *   reach the minimum score: the same title from an unrelated channel is often an unlabelled cover;
  * - duration (when both are known): within 15 s 25 points, fading to 0 at 60 s, rejected beyond;
- * - minus 50 for every version marker (cover, remix, live, …) the original title does not have.
+ * - minus 50 for every kind of version marker (cover, remix, live / TV performance, dance
+ *   practice, …) only one of the two titles has.
  * Anything under `MIN_ALTERNATE_SCORE` is never played: skipping is better than a wrong song.
  */
 import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 
-export const MIN_ALTERNATE_SCORE = 60;
+export const MIN_ALTERNATE_SCORE = 75;
 /** How many of the best candidates are checked for embeddability before one is chosen. */
 export const ALTERNATE_CANDIDATES_TO_CHECK = 3;
 
-const TITLE_WEIGHT = 55;
-const ARTIST_WEIGHT = 20;
+const TITLE_WEIGHT = 45;
+const ARTIST_WEIGHT = 30;
 const DURATION_WEIGHT = 25;
 const MARKER_PENALTY = 50;
 const MIN_TITLE_SIMILARITY = 0.5;
@@ -49,8 +52,20 @@ const VERSION_MARKERS: Record<string, string> = {
   extended: 'extended',
   hour: 'hour',
   hours: 'hour',
+  remake: 'cover',
+  rendition: 'cover',
   reaction: 'reaction',
   mashup: 'mashup',
+  performance: 'live',
+  festival: 'live',
+  concert: 'live',
+  tour: 'live',
+  fancam: 'live',
+  stage: 'live',
+  dance: 'dance',
+  practice: 'dance',
+  choreography: 'dance',
+  mirrored: 'dance',
 };
 
 /** Words that say nothing about which song it is. */
@@ -141,22 +156,27 @@ export interface AlternateOriginal {
 /** Score of `candidate` as another upload of `original` (higher is better), or `null` = never. */
 export function scoreAlternateUpload(original: AlternateOriginal, candidate: InnerTubeParsedTrack): number | null {
   // Who is named as the artist: the uploaders, plus a side of an "Artist - Title" / "Title - Artist"
-  // title that is exactly an uploader's name (`Kavinsky - Nightcall` uploaded by `Kavinsky - Topic`)
+  // title that is exactly an uploader's name (`Kavinsky - Nightcall` uploaded by `Kavinsky - Topic`),
+  // or both sides when the two titles are the same "A - B" pair (two re-uploads, in either order)
   const uploaders = [compactArtist(original.artist), compactArtist(candidate.artist)].filter((n) => n.length >= 2);
+  const originalSides = dashSides(original.title);
+  const candidateSides = dashSides(candidate.title);
+  const sideKey = (sides: string[]) => sides.map(compactArtist).sort().join(' ');
+  const samePair = originalSides.length === 2 && sideKey(originalSides) === sideKey(candidateSides);
   const artistWords = new Set([...words(original.artist), ...words(candidate.artist)]);
-  const namesOf = (track: AlternateOriginal) => {
+  const namesOf = (track: AlternateOriginal, sides: string[]) => {
     const names = [compactArtist(track.artist)];
-    for (const side of dashSides(track.title)) {
+    for (const side of sides) {
       const compact = compactArtist(side);
-      if (compact.length >= 2 && uploaders.includes(compact)) {
+      if (compact.length >= 2 && (samePair || uploaders.includes(compact))) {
         names.push(compact);
         for (const w of words(side)) artistWords.add(w);
       }
     }
     return names.filter((n) => n.length >= 2);
   };
-  const originalArtists = namesOf(original);
-  const candidateArtists = namesOf(candidate);
+  const originalArtists = namesOf(original, originalSides);
+  const candidateArtists = namesOf(candidate, candidateSides);
 
   const similarity = diceSimilarity(titleWords(original.title, artistWords), titleWords(candidate.title, artistWords));
   if (similarity < MIN_TITLE_SIMILARITY) return null;
@@ -179,10 +199,12 @@ export function scoreAlternateUpload(original: AlternateOriginal, candidate: Inn
         : (DURATION_WEIGHT * (DURATION_REJECT_MS - delta)) / (DURATION_REJECT_MS - DURATION_EXACT_MS);
   }
 
+  // A marker on one side only means another recording, in both directions (a karaoke track is not
+  // replaced by the vocal original either)
   const originalMarkers = markersOf(original.title);
-  for (const marker of markersOf(candidate.title)) {
-    if (!originalMarkers.has(marker)) score -= MARKER_PENALTY;
-  }
+  const candidateMarkers = markersOf(candidate.title);
+  for (const marker of candidateMarkers) if (!originalMarkers.has(marker)) score -= MARKER_PENALTY;
+  for (const marker of originalMarkers) if (!candidateMarkers.has(marker)) score -= MARKER_PENALTY;
   return Math.round(score * 10) / 10;
 }
 
