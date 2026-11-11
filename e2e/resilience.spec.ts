@@ -14,6 +14,24 @@ test.describe('resilience', () => {
     await expect(app.currentTitle).toHaveText(song);
   });
 
+  test('the next song plays even when it is the very upload the previous song fell back to', async ({ app }) => {
+    await app.open();
+    const song = await app.searchAndPlayFirst('goo goo dolls iris');
+    const original = (await app.yt())?.videoId ?? '';
+    // Queue the song whose own upload will become the alternate of the playing one
+    await app.search('Goo Goo Goo Dolls Iris');
+    await expect(app.resultRows().first()).toContainText('Goo Goo Goo Dolls Iris');
+    const next = await app.chooseFromTrackMenu(app.results, 0, 'Add to queue');
+    expect(next).not.toBe(song);
+    await app.ytDo('reloadSameVideo', original);
+    await expect.poll(async () => (await app.yt())?.videoId).toBe(fixtureVideoId('search:goo goo goo dolls iris:0'));
+    await expect.poll(() => app.ytState()).toBe(1);
+
+    await app.ytDo('endSong');
+    await expect(app.currentTitle).toHaveText(next);
+    await expect.poll(() => app.ytState(), { message: 'the same video is restarted, not left ended' }).toBe(1);
+  });
+
   test('songs that cannot be played are skipped, and three failures in a row stop playback', async ({ app }) => {
     await app.open({ yt: { errorIds: ['*'] } });
     await app.search('broken uploads');

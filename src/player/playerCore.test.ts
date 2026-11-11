@@ -522,6 +522,31 @@ describe('unplayable songs and alternate uploads', () => {
   });
 });
 
+describe('two songs on the same upload', () => {
+  test('the next song restarts the loaded video when it plays the same upload as the one that ended', () => {
+    // "a" fell back to the upload of "b" (an alternate upload), then "b" itself comes next
+    let state = run(
+      fresh(),
+      { type: 'playFromSearch', track: yt('a') },
+      { type: 'addToQueue', track: yt('b') },
+      { type: 'alternateVideoFound', trackId: ytId('a'), videoId: vid('b') },
+      { type: 'seekHandled' }
+    );
+    assert.equal(state.tracksById[ytId('a')].videoId, state.tracksById[ytId('b')].videoId);
+    state = run(state, { type: 'trackEnded', trackId: ytId('a'), random: 0 });
+    assert.equal(active(state), 'b');
+    // The player keeps the same video loaded (nothing to switch to): only a seek restarts it
+    assert.equal(state.seekRequest?.ms, 0);
+    assert.equal(state.isPlaying, true);
+  });
+
+  test('songs on different uploads need no seek (a new video loads from the start)', () => {
+    const state = run(fresh(), { type: 'playFromSearch', track: yt('a') }, { type: 'addToQueue', track: yt('b') }, { type: 'next', random: 0 });
+    assert.equal(active(state), 'b');
+    assert.equal(state.seekRequest, null);
+  });
+});
+
 describe('uploads checked before they are reached (embeddability pre-check)', () => {
   const live = () =>
     run(

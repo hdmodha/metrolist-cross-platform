@@ -286,6 +286,9 @@ function startTrack(
   if (!track) return state;
   const previousId = state.activeTrackId;
   const sameTrack = previousId === trackId;
+  // Another song on the upload that is already loaded (an alternate upload can be another song's
+  // own video): the player has nothing to switch to, so it must be restarted like a replay
+  const sameVideo = sameTrack || getTrack(state, previousId)?.videoId === track.videoId;
 
   let playHistory = state.playHistory;
   if (options.recordHistory && previousId && !sameTrack) {
@@ -306,12 +309,12 @@ function startTrack(
     recentlyPlayedIds: recordPlayed(state.recentlyPlayedIds, trackId),
     userQueuedIds: state.userQueuedIds.filter((id) => id !== trackId),
     streamStatus: 'loading',
-    // A different video always loads from 0 by itself; only a replay needs an explicit seek
+    // A different video always loads from 0 by itself; only the same video needs an explicit seek
     seekRequest: null,
     consecutiveStreamFailures: options.userInitiated ? 0 : state.consecutiveStreamFailures,
     radio,
   };
-  return sameTrack ? withSeek(next, 0) : next;
+  return sameVideo ? withSeek(next, 0) : next;
 }
 
 function restartCurrent(state: PlayerState): PlayerState {
