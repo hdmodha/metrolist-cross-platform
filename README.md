@@ -102,7 +102,7 @@ Requirements: Android 5.1 or newer; the visibility script needs an up-to-date **
 
 Building it yourself: the generated Android project needs Metrolist's `MainActivity` (it swaps in the WebView above): run `npm run native:prepare` after `npx cap add android` (see [CONTRIBUTING](CONTRIBUTING.md)). Without it the app works but stops on Home as before, and its debug log says so.
 
-**What to check on a phone** (tested on a simulated bridge and compiled in CI, not yet on a device):
+**What to check on a phone** (the Android app was confirmed on a phone in release v1.0.0; repeat this list after native changes):
 - Play a song, **press Home**, open another app, come back after a few songs: the music never stopped and the next song started on its own. Also with the screen off, and switching apps from the recents screen.
 - The notification and lock screen show the title, artist and cover; play / pause / next / previous and dragging the seek bar work; so do Bluetooth headset buttons.
 - Pause from the notification while the app is in the background: it stays paused (it is not resumed by the safety net); resume from the notification after a minute: it plays again.
@@ -126,7 +126,7 @@ For device tests there is a hidden log of the last 100 player, page and plugin e
 
 | | Keeps playing in the background | Lock screen / media keys | Ad blocking |
 |---|---|---|---|
-| **Android app** | Yes: screen off, Home, other apps (see above; device test pending for Home) | Notification, lock screen, Bluetooth / headset | Yes |
+| **Android app** | Yes: screen off, Home, other apps (see above; confirmed on an Android phone, v1.0.0) | Notification, lock screen, Bluetooth / headset | Yes |
 | **iOS app** | Intended (background audio); untested on a device | Lock screen, Control Center, headset | Yes (WebKit content blocker) |
 | **Desktop app** (macOS, Windows, Linux) | Yes, also minimised or hidden (macOS: closing the window hides it) | OS media keys / controls | Yes |
 | **Desktop browsers** | Yes while the tab stays open (a background tab keeps playing) | Browser media controls | Use the browser's blocker |
