@@ -2,6 +2,8 @@ import React from 'react';
 import { ChevronLeft, ClipboardCopy, RefreshCw, Trash2 } from 'lucide-react';
 import { APP_VERSION } from '../appVersion';
 import { NavLink } from '../components/NavLink';
+import { useAppActions } from '../app/AppActionsContext';
+import { readStreamQualityMode, type StreamQualityMode } from '../player/streamQuality';
 import { getNativeBackgroundPlayback } from '../native/backgroundPlayback';
 import { countRender } from '../utils/renderProbe';
 import {
@@ -27,6 +29,8 @@ const SOURCE_COLOR: Record<DebugEntry['source'], string> = {
 export const DebugPage = React.memo(function DebugPage() {
   countRender('DebugPage');
   const appEntries = React.useSyncExternalStore(debugLog.subscribe, debugLog.entries, debugLog.entries);
+  const { player } = useAppActions();
+  const [qualityMode, setQualityMode] = React.useState<StreamQualityMode>(readStreamQualityMode);
   const plugin = React.useMemo(() => getNativeBackgroundPlayback(), []);
   const [nativeEntries, setNativeEntries] = React.useState<DebugEntry[]>([]);
   const [copied, setCopied] = React.useState<'idle' | 'copied' | 'failed'>('idle');
@@ -65,6 +69,25 @@ export const DebugPage = React.memo(function DebugPage() {
         Metrolist {APP_VERSION} · {plugin ? `${plugin.platform} app` : 'web / desktop'} · the last {oldestFirst.length} player, page and
         plugin events, newest first. Kept in memory only; nothing is sent anywhere.
       </p>
+      <div className="space-y-1">
+        <label htmlFor="stream-quality" className="block text-sm font-semibold text-white">
+          Video quality of the hidden player
+        </label>
+        <select
+          id="stream-quality"
+          value={qualityMode}
+          onChange={(e) => {
+            const mode: StreamQualityMode = e.target.value === 'auto' ? 'auto' : 'low';
+            setQualityMode(mode);
+            player.setStreamQualityMode(mode);
+          }}
+          className="tap-target rounded-lg bg-zinc-800 px-3 py-2 text-sm text-white"
+        >
+          <option value="low">Low (default)</option>
+          <option value="auto">Auto (YouTube decides)</option>
+        </select>
+        <p className="text-xs text-zinc-400">Only the audio is used. Takes effect after restarting the app.</p>
+      </div>
       <div className="flex flex-wrap gap-2">
         {plugin && (
           <button type="button" className={button} onClick={refresh}>

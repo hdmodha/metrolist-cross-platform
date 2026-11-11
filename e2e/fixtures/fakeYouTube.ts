@@ -7,6 +7,7 @@
  * - `current().__debug()` → `{ state, time, videoId, destroyed }` of the newest player
  * - `instances` → every player ever created (a re-created stream shows up as a new instance)
  * - `loaded` → every video id a player was created with, loaded or cued
+ * - `quality` (what the player reports) and `qualityCalls` (every `setPlaybackQuality` argument)
  * - `__userTap()` (a tap on the revealed player), `__externalPause()` (OS media key), `__stall()` (buffering forever)
  * - `lateErrorOnSwitch = true`: the next switch to another video first delivers an error 150 for the
  *   video it switches away from (like a real player whose error was still on its way), then plays
@@ -32,6 +33,8 @@ export interface FakeYouTubeOptions {
   probeUrls?: string[];
   /** The next switch to another video first raises error 150 for the previous one (see above). */
   lateErrorOnSwitch?: boolean;
+  /** What `getPlaybackQuality()` and the quality-change event report (default `tiny`). */
+  quality?: string;
 }
 
 export interface FakePlayerDebug {
@@ -54,6 +57,8 @@ export interface FakePlayer {
 export interface FakeYouTubeControl extends Required<FakeYouTubeOptions> {
   /** `ok` / `failed` per probe URL (the newest player's request). */
   probes: Record<string, 'ok' | 'failed'>;
+  /** Every `setPlaybackQuality(q)` call, in order. */
+  qualityCalls: string[];
   instances: FakePlayer[];
   /** Every video id a player was created with, loaded or cued, in order. */
   loaded: string[];
@@ -89,6 +94,8 @@ export function installFakeYouTubeApi(): void {
   ctl.readyDelayMs = ctl.readyDelayMs || 60;
   ctl.lateErrorOnSwitch = !!ctl.lateErrorOnSwitch;
   ctl.probes = {};
+  ctl.qualityCalls = [];
+  ctl.quality = ctl.quality || 'tiny';
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
     const self = this;
@@ -111,7 +118,7 @@ export function installFakeYouTubeApi(): void {
       state = next;
       if (opts.events.onStateChange) opts.events.onStateChange({ data: next, target: self });
       if (next === 1 && opts.events.onPlaybackQualityChange) {
-        opts.events.onPlaybackQualityChange({ data: 'tiny', target: self });
+        opts.events.onPlaybackQualityChange({ data: ctl.quality, target: self });
       }
     };
     const start = () => {
@@ -180,7 +187,10 @@ export function installFakeYouTubeApi(): void {
     self.getCurrentTime = () => time;
     self.getDuration = () => duration();
     self.getPlayerState = () => state;
-    self.getPlaybackQuality = () => 'tiny';
+    self.getPlaybackQuality = () => ctl.quality;
+    self.setPlaybackQuality = (q: string) => {
+      ctl.qualityCalls.push(q);
+    };
     self.destroy = () => {
       destroyed = true;
       clearInterval(timer);

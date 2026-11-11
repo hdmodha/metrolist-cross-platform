@@ -2,6 +2,7 @@ import React from 'react';
 import { STREAM_ERROR_API_UNAVAILABLE } from '../player/effectPolicies';
 import { appActivity, positionPollIntervalMs } from '../player/appActivity';
 import type { StreamStatus } from '../player/playerCore';
+import { hiddenPlayerCssSize, isAboveTarget, type StreamQualityMode } from '../player/streamQuality';
 
 /*
  * Stream status reported to the player core:
@@ -35,8 +36,21 @@ interface YouTubeStreamBridgeProps {
   onError: (code: number, videoId?: string) => void;
   /** The stream was paused / resumed outside the app UI (OS media keys, headset button, tap on player). */
   onExternalPlayPause?: (playing: boolean) => void;
-  /** The quality the player picked (measuring only: nothing is ever requested). */
-  onPlaybackQuality?: (quality: string, videoId: string) => void;
+  /** `low` (default): a small hidden player that asks for `small`; `auto`: 1x1, YouTube decides. Read when the stream starts. */
+  qualityMode: StreamQualityMode;
+  /** The quality the player picked, with what was done about it (for the debug log). */
+  onPlaybackQuality?: (quality: string, videoId: string, details: StreamQualityDetails) => void;
+}
+
+/** What the bridge knew when it reported a quality. */
+export interface StreamQualityDetails {
+  mode: StreamQualityMode;
+  /** The hidden player's box in CSS pixels. */
+  width: number;
+  height: number;
+  dpr: number;
+  /** `setPlaybackQuality('small')` was called for this video (low mode only). */
+  asked: boolean;
 }
 
 declare global {
@@ -75,6 +89,7 @@ interface YTPlayerInstance {
   getDuration: () => number;
   getPlayerState: () => number;
   getPlaybackQuality?: () => string;
+  setPlaybackQuality?: (quality: string) => void;
   /** The video the player last reported (undocumented, but present in the IFrame API). */
   getVideoData?: () => { video_id?: string } | null | undefined;
   getVideoUrl?: () => string;
@@ -170,7 +185,9 @@ function loadYouTubeIframeApi(listener: ApiListener) {
 }
 
 export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) => {
-  const { videoId, isPlaying, volume, isMuted, seekRequest, retryNonce } = props;
+  const { videoId, isPlaying, volume, isMuted, seekRequest, retryNonce, qualityMode } = props;
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+  const hiddenSize = hiddenPlayerCssSize(qualityMode, dpr);
 
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const playerRef = React.useRef<YTPlayerInstance | null>(null);
@@ -191,21 +208,55 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
   latest.current = props;
 
   const qualityVideoRef = React.useRef<string | null>(null);
-  /** Reports the quality once per video when it first plays, and on every change event. */
-  const reportQuality = React.useCallback((known?: string) => {
-    const player = playerRef.current;
-    const videoId = reportedVideoId(player) ?? loadedVideoIdRef.current;
-    if (known === undefined) {
-      if (qualityVideoRef.current === videoId) return;
-      qualityVideoRef.current = videoId;
-    }
+  /** `${videoId} ${quality}` pairs `setPlaybackQuality('small')` was already called for (no loops). */
+  const askedRef = React.useRef(new Set<string>());
+  /** Videos it was called for at all (for the log line). */
+  const askedVideosRef = React.useRef(new Set<string>());
+  const boxRef = React.useRef({ mode: qualityMode, width: hiddenSize.width, height: hiddenSize.height, dpr });
+  boxRef.current = { mode: qualityMode, width: hiddenSize.width, height: hiddenSize.height, dpr };
+
+  /** Low mode: asks the player for `small` (documented as a no-op, so the log shows whether it helps). */
+  const askForSmall = React.useCallback((player: YTPlayerInstance | null | undefined, videoId: string, reported: string) => {
+    if (boxRef.current.mode !== 'low' || !player || typeof player.setPlaybackQuality !== 'function') return;
+    const key = `${videoId} ${reported}`;
+    if (askedRef.current.has(key)) return;
+    if (askedRef.current.size > 200) askedRef.current.clear();
+    askedRef.current.add(key);
+    askedVideosRef.current.add(videoId);
     try {
-      const quality = known ?? player?.getPlaybackQuality?.();
-      if (typeof quality === 'string' && quality) latest.current.onPlaybackQuality?.(quality, videoId);
+      player.setPlaybackQuality('small');
     } catch {
       // a player that is being torn down
     }
   }, []);
+
+  /** Reports the quality once per video when it first plays, and on every change event. */
+  const reportQuality = React.useCallback(
+    (known?: string) => {
+      const player = playerRef.current;
+      const videoId = reportedVideoId(player) ?? loadedVideoIdRef.current;
+      if (known === undefined) {
+        if (qualityVideoRef.current === videoId) return;
+        qualityVideoRef.current = videoId;
+      }
+      try {
+        const quality = known ?? player?.getPlaybackQuality?.();
+        if (typeof quality !== 'string' || !quality) return;
+        if (isAboveTarget(quality)) askForSmall(player, videoId, quality);
+        const { mode, width, height, dpr: ratio } = boxRef.current;
+        latest.current.onPlaybackQuality?.(quality, videoId, {
+          mode,
+          width,
+          height,
+          dpr: ratio,
+          asked: askedVideosRef.current.has(videoId),
+        });
+      } catch {
+        // a player that is being torn down
+      }
+    },
+    [askForSmall]
+  );
 
   const clearWatchdog = React.useCallback(() => {
     if (watchdogRef.current !== null) {
@@ -321,6 +372,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                   if (disposed) return;
                   isReadyRef.current = true;
                   applyVolume(ev.target);
+                  askForSmall(ev.target, latest.current.videoId, 'ready');
                   // The track may have changed while the player was still loading
                   const wanted = latest.current.videoId;
                   if (wanted !== loadedVideoIdRef.current) {
@@ -428,7 +480,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
       }
       host?.replaceChildren();
     };
-  }, [applySeek, applyVolume, armStartWatchdog, clearWatchdog, retryNonce]);
+  }, [applySeek, applyVolume, armStartWatchdog, askForSmall, clearWatchdog, retryNonce]);
 
   // Switch video when a different track (or an alternate upload of the same track) is selected
   React.useEffect(() => {
@@ -526,15 +578,20 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
       className={
         isBlocked
           ? 'fixed right-3 z-[70] w-64 max-w-[calc(100vw-1.5rem)] rounded-xl overflow-hidden border border-emerald-500/50 bg-zinc-950 shadow-2xl bottom-[calc(var(--chrome-bottom)+0.75rem)]'
-          : 'fixed bottom-0 right-0 w-px h-px opacity-0 pointer-events-none overflow-hidden'
+          : 'fixed bottom-0 right-0 -z-10 opacity-0 pointer-events-none'
       }
+      style={isBlocked ? undefined : { width: hiddenSize.width, height: hiddenSize.height }}
     >
       {isBlocked && (
         <p className="px-3 py-2 text-xs font-semibold text-emerald-300">
           Tap the player below to start playback
         </p>
       )}
-      <div ref={hostRef} className={isBlocked ? 'w-full aspect-video' : 'w-px h-px'} />
+      <div
+        ref={hostRef}
+        className={isBlocked ? 'w-full aspect-video' : undefined}
+        style={isBlocked ? undefined : { width: hiddenSize.width, height: hiddenSize.height }}
+      />
     </div>
   );
 };

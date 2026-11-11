@@ -19,6 +19,7 @@ import {
   lifecycleToPlayerEffect,
   planBackgroundSync,
   playbackStateFor,
+  startPositionAfterSwitch,
   toBackgroundUpdate,
   type BackgroundPlayerActions,
   type SentUpdate,
@@ -330,6 +331,37 @@ describe('connecting the player to the plugin', () => {
     assert.equal(h.fake.updates().at(-1)!.title, 'Song b');
     assert.equal(h.fake.calls.filter((c) => c.method === 'ensureNotificationPermission').length, 1);
     h.disconnect();
+  });
+
+  test('a new song is sent from 0, not from the previous song\'s position (the clock is reset later)', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'playFromList', track: yt('a'), context: [yt('a'), yt('b')] });
+    state = playerReducer(state, { type: 'streamStatusChanged', status: 'playing' });
+    const h = harness(state);
+    h.clock.setPositionMs(94000);
+    assert.equal(h.fake.updates().at(-1)!.positionMs, 94000);
+    h.store.dispatch({ type: 'next', random: 0 });
+    const first = h.fake.updates().at(-1)!;
+    assert.equal(first.title, 'Song b');
+    assert.equal(first.state, 'buffering');
+    assert.equal(first.positionMs, 0, 'the clock still says 94 s here');
+    const count = h.fake.updates().length;
+    h.clock.setPositionMs(0); // the effect that resets it
+    assert.equal(h.fake.updates().length, count, 'nothing new to say');
+    h.clock.setPositionMs(30000); // a later seek is honoured
+    assert.equal(h.fake.updates().at(-1)!.positionMs, 30000);
+    h.disconnect();
+  });
+
+  test('a restored song keeps its saved position; a seek request at the switch is honoured', () => {
+    const restored = playerReducer(createInitialPlayerState(), { type: 'restore', snapshot: playing(), positionMs: 30000 });
+    const h = harness(restored);
+    h.clock.setPositionMs(30000);
+    h.store.dispatch({ type: 'setPlaying', playing: true });
+    assert.equal(h.fake.updates().at(-1)!.positionMs, 30000, 'same song: the clock is right');
+    h.disconnect();
+    assert.equal(startPositionAfterSwitch({ seekRequest: { token: 1, ms: 12000 } }), 12000);
+    assert.equal(startPositionAfterSwitch({ seekRequest: null }), 0);
+    assert.equal(startPositionAfterSwitch({ seekRequest: { token: 1, ms: Number.NaN } }), 0);
   });
 
   test('clock ticks send the position at most every 5 seconds; a seek at once', () => {

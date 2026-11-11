@@ -217,6 +217,9 @@ test.describe('background playback plugin (Android and iOS shells)', () => {
     await expect(app.currentTitle).toHaveText(next);
     await expect.poll(() => app.ytState()).toBe(1);
     await expect.poll(() => lastUpdate(page)).toMatchObject({ title: next, state: 'playing' });
+    // The first update for the new song starts at 0 (the clock still held the previous song's position)
+    const firstForNext = (await pluginCalls(page)).find((c) => c.method === 'update' && c.options.title === next);
+    expect(firstForNext?.options.positionMs).toBe(0);
 
     // "Pause" (a headset button, or headphones unplugged)
     await sendCommand(page, { action: 'pause', reason: 'noisy' });
