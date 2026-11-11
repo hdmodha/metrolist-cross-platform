@@ -65,6 +65,25 @@ test.describe('persistence', () => {
     expect(time).toBeLessThan(95);
   });
 
+  test('while playing, the periodic save writes only the small position key', async ({ app, page }) => {
+    await app.open();
+    await app.searchAndPlayFirst('daft punk');
+    await app.showControls();
+    await app.seekBar.fill('90000');
+    await expect.poll(async () => (await app.yt())?.time ?? 0).toBeGreaterThanOrEqual(89);
+    const position = () =>
+      page.evaluate(() => {
+        const raw = localStorage.getItem('metrolist.player.position.v1');
+        return raw ? (JSON.parse(raw) as { trackId: string; positionMs: number }) : null;
+      });
+    // The periodic save runs at most every 5 s while playing
+    await expect.poll(async () => (await position())?.positionMs ?? 0, { timeout: 12_000 }).toBeGreaterThanOrEqual(90_000);
+    await page.reload();
+    await expect(app.main).toBeVisible();
+    await app.showControls();
+    await expect.poll(() => app.seekValue()).toBeGreaterThanOrEqual(89_000);
+  });
+
   test('saved data from the previous version appears as Liked Songs and Downloads after the upgrade', async ({ app, page }) => {
     const [a, b, c, d] = songs('old library', 4);
     await app.open({

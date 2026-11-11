@@ -1,5 +1,6 @@
 import React from 'react';
 import { STREAM_ERROR_API_UNAVAILABLE } from '../player/effectPolicies';
+import { appActivity, positionPollIntervalMs } from '../player/appActivity';
 import type { StreamStatus } from '../player/playerCore';
 
 /*
@@ -34,6 +35,8 @@ interface YouTubeStreamBridgeProps {
   onError: (code: number, videoId?: string) => void;
   /** The stream was paused / resumed outside the app UI (OS media keys, headset button, tap on player). */
   onExternalPlayPause?: (playing: boolean) => void;
+  /** The quality the player picked (measuring only: nothing is ever requested). */
+  onPlaybackQuality?: (quality: string, videoId: string) => void;
 }
 
 declare global {
@@ -50,6 +53,7 @@ declare global {
             onReady?: (ev: { target: YTPlayerInstance }) => void;
             onStateChange?: (ev: { data: number; target: YTPlayerInstance }) => void;
             onError?: (ev: { data: number; target?: YTPlayerInstance }) => void;
+            onPlaybackQualityChange?: (ev: { data: unknown; target?: YTPlayerInstance }) => void;
           };
         }
       ) => YTPlayerInstance;
@@ -70,6 +74,7 @@ interface YTPlayerInstance {
   getCurrentTime: () => number;
   getDuration: () => number;
   getPlayerState: () => number;
+  getPlaybackQuality?: () => string;
   /** The video the player last reported (undocumented, but present in the IFrame API). */
   getVideoData?: () => { video_id?: string } | null | undefined;
   getVideoUrl?: () => string;
@@ -184,6 +189,23 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
   // (Capturing them once at mount made "track ended" act on a stale queue.)
   const latest = React.useRef(props);
   latest.current = props;
+
+  const qualityVideoRef = React.useRef<string | null>(null);
+  /** Reports the quality once per video when it first plays, and on every change event. */
+  const reportQuality = React.useCallback((known?: string) => {
+    const player = playerRef.current;
+    const videoId = reportedVideoId(player) ?? loadedVideoIdRef.current;
+    if (known === undefined) {
+      if (qualityVideoRef.current === videoId) return;
+      qualityVideoRef.current = videoId;
+    }
+    try {
+      const quality = known ?? player?.getPlaybackQuality?.();
+      if (typeof quality === 'string' && quality) latest.current.onPlaybackQuality?.(quality, videoId);
+    } catch {
+      // a player that is being torn down
+    }
+  }, []);
 
   const clearWatchdog = React.useCallback(() => {
     if (watchdogRef.current !== null) {
@@ -332,6 +354,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                     clearWatchdog();
                     setIsBlocked(false);
                     latest.current.onStatusChange('playing');
+                    reportQuality();
                     if (!latest.current.isPlaying) {
                       settleTimerRef.current = window.setTimeout(() => {
                         settleTimerRef.current = null;
@@ -361,6 +384,11 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                     clearWatchdog();
                     latest.current.onEnded();
                   }
+                },
+                onPlaybackQualityChange: (ev) => {
+                  if (disposed) return;
+                  const quality = typeof ev.data === 'string' ? ev.data : undefined;
+                  if (quality) reportQuality(quality);
                 },
                 onError: (ev) => {
                   if (disposed) return;
@@ -460,28 +488,37 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
     else pendingSeekRef.current = request;
   }, [seekToken, applySeek]);
 
-  // Poll current playback time & full song duration every 250ms while playing
+  // Poll current playback time & full song duration while playing: every 250 ms with the app in
+  // the foreground, every second in the background (nothing shows the position then); once at
+  // once on the way back, so the seek bar is right immediately
+  const { isBackground } = React.useSyncExternalStore(
+    appActivity.subscribe,
+    appActivity.getSnapshot,
+    appActivity.getSnapshot
+  );
+  const pollOnce = React.useCallback(() => {
+    const player = playerRef.current;
+    if (!player || !isReadyRef.current) return;
+    try {
+      if (player.getPlayerState() !== YT_STATE.PLAYING) return;
+      const curSec = player.getCurrentTime();
+      const durSec = player.getDuration();
+      if (Number.isFinite(curSec) && curSec >= 0) {
+        const durMs = Number.isFinite(durSec) && durSec > 35 ? Math.round(durSec * 1000) : undefined;
+        latest.current.onTimeUpdateMs(Math.round(curSec * 1000), durMs);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+  const wasBackgroundRef = React.useRef(isBackground);
   React.useEffect(() => {
     if (!isPlaying) return;
-    const timer = window.setInterval(() => {
-      const player = playerRef.current;
-      if (!player || !isReadyRef.current) return;
-      try {
-        if (player.getPlayerState() !== YT_STATE.PLAYING) return;
-        const curSec = player.getCurrentTime();
-        const durSec = player.getDuration();
-        if (Number.isFinite(curSec) && curSec >= 0) {
-          const durMs =
-            Number.isFinite(durSec) && durSec > 35 ? Math.round(durSec * 1000) : undefined;
-          latest.current.onTimeUpdateMs(Math.round(curSec * 1000), durMs);
-        }
-      } catch {
-        // ignore
-      }
-    }, 250);
-
+    if (wasBackgroundRef.current && !isBackground) pollOnce();
+    wasBackgroundRef.current = isBackground;
+    const timer = window.setInterval(pollOnce, positionPollIntervalMs(isBackground));
     return () => window.clearInterval(timer);
-  }, [isPlaying]);
+  }, [isPlaying, isBackground, pollOnce]);
 
   return (
     <div

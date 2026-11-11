@@ -23,6 +23,8 @@ import { isValidYouTubeVideoId, sanitizeRadioContinuation } from './metrolistCor
 
 export const STORAGE_KEY = 'metrolist.player.v2';
 export const LEGACY_STORAGE_KEY = 'metrolist.player.v1';
+/** The playing position alone, so the periodic save while playing stays a few bytes. */
+export const POSITION_STORAGE_KEY = 'metrolist.player.position.v1';
 /** Upper bound of stored songs (Liked Songs + Downloads + history + queue). */
 const MAX_SAVED_TRACKS = 5000;
 export const MAX_SAVED_QUEUE_TRACKS = 200;
@@ -256,10 +258,48 @@ export function savePlayerState(
   try {
     if (!storage) return false;
     storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // Both keys always agree after a full save
+    if (state.activeTrackId !== null) writePosition(state.activeTrackId, state.positionMs, storage);
+    else storage.removeItem(POSITION_STORAGE_KEY);
     return true;
   } catch {
     // Storage full or blocked: the library simply will not persist
     return false;
+  }
+}
+
+function writePosition(trackId: string, positionMs: number, storage: KeyValueStorage): void {
+  storage.setItem(POSITION_STORAGE_KEY, JSON.stringify({ trackId, positionMs }));
+}
+
+/** Writes only the playing position (cheap: the periodic save while playing). */
+export function savePlaybackPosition(
+  trackId: string,
+  positionMs: number,
+  storage: KeyValueStorage | null = defaultStorage()
+): boolean {
+  try {
+    if (!storage || !Number.isFinite(positionMs) || positionMs < 0) return false;
+    writePosition(trackId, Math.round(positionMs), storage);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The saved position key, validated; null when absent or malformed. */
+function readPosition(storage: KeyValueStorage): { trackId: string; positionMs: number } | null {
+  try {
+    const raw = storage.getItem(POSITION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const { trackId, positionMs } = parsed as { trackId?: unknown; positionMs?: unknown };
+    if (typeof trackId !== 'string' || typeof positionMs !== 'number') return null;
+    if (!Number.isFinite(positionMs) || positionMs < 0) return null;
+    return { trackId, positionMs };
+  } catch {
+    return null;
   }
 }
 
@@ -269,7 +309,15 @@ export function loadPlayerState(
   try {
     if (!storage) return { ...DEFAULT_PLAYER_STATE };
     const raw = storage.getItem(STORAGE_KEY);
-    if (raw) return readPersisted(JSON.parse(raw));
+    if (raw) {
+      const state = readPersisted(JSON.parse(raw));
+      const position = readPosition(storage);
+      // Only for the song the full state names as active
+      if (position && state.activeTrackId !== null && position.trackId === state.activeTrackId) {
+        state.positionMs = position.positionMs;
+      }
+      return state;
+    }
     const legacy = storage.getItem(LEGACY_STORAGE_KEY);
     if (!legacy) return { ...DEFAULT_PLAYER_STATE };
     const migrated = migrateLegacyState(JSON.parse(legacy));

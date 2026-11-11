@@ -138,6 +138,15 @@ export function commandToPlayerCall(command: unknown): PlayerCall | null {
  * A `lifecycle` event of the plugin: `save` when the app leaves the foreground (`pause`, `stop`),
  * `none` when it is back (`resume`), `null` for anything malformed.
  */
+/** What the app's activity becomes on a plugin lifecycle event: `pause` alone is not background. */
+export function lifecycleToActivity(event: unknown): 'background' | 'foreground' | null {
+  if (!event || typeof event !== 'object') return null;
+  const { state } = event as { state?: unknown };
+  if (state === 'stop') return 'background';
+  if (state === 'resume') return 'foreground';
+  return null;
+}
+
 export function lifecycleToPlayerEffect(event: unknown): 'save' | 'none' | null {
   if (!event || typeof event !== 'object') return null;
   const { state } = event as { state?: unknown };
@@ -171,6 +180,8 @@ export function connectBackgroundPlayback(options: {
   now?: () => number;
   pauseOrigin?: () => BackgroundPlaybackPausedBy;
   onSave?: () => void;
+  /** The app left / returned to the foreground (`stop` / `resume` lifecycle events). */
+  onActivity?: (activity: 'background' | 'foreground') => void;
   log?: (message: string) => void;
 }): () => void {
   const { plugin, store, clock, actions } = options;
@@ -227,6 +238,8 @@ export function connectBackgroundPlayback(options: {
     if (effect === null || !connected) return;
     log(`App lifecycle: ${(event as { state: string }).state}`);
     if (effect === 'save') options.onSave?.();
+    const activity = lifecycleToActivity(event);
+    if (activity) options.onActivity?.(activity);
   });
   const unsubscribeStore = store.subscribe(sync);
   const unsubscribeClock = clock.subscribe(sync);
