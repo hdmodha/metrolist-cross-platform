@@ -56,18 +56,19 @@ Uninstalling keeps this folder; delete it to start fresh. The library belongs to
 - **Search**: live YouTube Music search as you type, recent searches, and a Browse grid of genres and moods.
 - **Library**: Liked Songs and Downloads (newest first, with Play and Shuffle) and your recently played songs.
 - **Mini player → Now Playing**: the playing song is docked above the tabs; tap it for a full-screen player with large artwork, seek bar, shuffle / repeat, the "⋮" menu and the Up next queue (reorder, remove, clear). Close it with the chevron, Escape, Back or a swipe down.
-- **Full-length streaming** through YouTube Music (ad and tracking requests blocked in the desktop app, see below), with **endless radio**: "Autoplay similar songs" keeps the music going with YouTube Music's own recommendations (`RDAMVM`) when your queue runs low, without ever dropping songs you queued.
+- **Full-length streaming** through YouTube Music (ad and tracking requests blocked in the desktop and Android apps, see below), with **endless radio**: "Autoplay similar songs" keeps the music going with YouTube Music's own recommendations (`RDAMVM`) when your queue runs low, without ever dropping songs you queued.
 - **Fewer unplayable songs**: some uploads can't be played outside youtube.com (their owner turned that off). The app checks the playing song and the next three with YouTube's public oEmbed endpoint and swaps a blocked upload for another upload of the same song *before* it is reached — scored on title, artist and length, never a cover, remix, live or sped-up version, and never anything that does not match well enough. A song with no good upload is skipped without being loaded, with a notice that says why; player errors get their own honest messages (removed or private, the owner's choice, a player error that is retried once, …).
-- **Ad blocking (desktop app)**: like Brave, the desktop app cancels the YouTube player's ad and tracking requests (DoubleClick, Google ad / analytics hosts, YouTube's ad and telemetry endpoints) while the video itself plays through the official YouTube player. See [Ad blocking per platform](#ad-blocking-per-platform).
+- **Ad blocking (desktop and Android apps)**: like Brave, the apps cancel the YouTube player's ad and tracking requests (DoubleClick, Google ad / analytics hosts, YouTube's ad and telemetry endpoints) while the video itself plays through the official YouTube player. See [Ad blocking per platform](#ad-blocking-per-platform).
+- **Background play on Android**: the music keeps playing with the screen off or another app in front, with a media notification (cover, previous / play-pause / next, seek bar), lock-screen and Bluetooth / headset controls. See [Android: background play](#android-background-play).
 - **Downloads, honestly**: "Download" adds a song to your Downloads list; the audio is not stored on the device, so those songs still need an internet connection to play.
 - **Remembers you**: liked songs, downloads, history, recent searches, the queue (resumed paused where you left off), volume and preferences are saved on the device. Data from older versions is upgraded automatically.
-- **Native OS media keys (`MediaSession API`)**: macOS Control Center, Windows media controls, iOS Lock Screen and Android media notifications; Space / ← / → on desktop.
+- **Native OS media keys**: macOS Control Center, Windows media controls and the iOS Lock Screen (`MediaSession API`); on Android the app's own media session drives the notification, lock screen and Bluetooth / headset buttons; Space / ← / → on desktop.
 
 ## How It Works on Each Device
 
 - **Phones and tablets** (narrower than 1024 px): bottom tabs, a docked mini player, full-screen Now Playing with swipe-down to close. Landscape phones get a compact two-column Now Playing.
 - **Desktop and large windows** (1024 px and wider): a sidebar with shortcuts to Liked Songs and Downloads, and a full-width player bar with volume and a queue button.
-- **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages).
+- **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages). The Android app keeps playing in the background and blocks ads (below).
 - **Desktop app (Electron)**: the same app in its own window; the server runs inside the app on `127.0.0.1` only. Closing the window on macOS keeps the music playing (Cmd+Q quits); media keys work through the OS media controls.
 - **Web / portable bundle**: talk to the bundled Express server (`dist-server/server.mjs`, built from `server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
 
@@ -79,7 +80,29 @@ Playback always uses the official YouTube IFrame player. What differs is who con
 |---|---|
 | **Desktop app** (macOS, Windows, Linux) | Blocked by the app: every request (the YouTube player's included) is checked against a conservative list in `src/shared/adBlock.ts` and ad / tracking requests are cancelled. Video streams, artwork, the player scripts and playback statistics are never blocked. |
 | **Web browser** (any build served to a browser) | The app cannot block requests the YouTube player makes from its own frame (browsers do not let a page block another site's requests). Use your browser's blocker: Brave Shields, uBlock Origin, or your browser's built-in protection. |
-| **Android / iOS app** | Not yet: the next release reuses the same rules (`src/shared/adBlockRules.json`, generated with `npm run adblock:rules`). |
+| **Android app** | Blocked by the app, with the same rules: the app's WebView answers ad / tracking requests (the YouTube player's included) with an empty response before they leave the phone. The rules ship with the app (`metrolist-ad-block-rules.json`, generated from `src/shared/adBlock.ts` by `npm run adblock:rules`). |
+| **iOS app** | Not yet (it would need a WKWebView content rule list; not implemented). |
+
+### Android: background play
+
+When the Android app goes to the background, Android tells the page it is hidden, and YouTube's player pauses itself when it sees that. The app does what Brave does, while the music still plays through YouTube's official player:
+
+1. **The YouTube player believes it is still visible.** A small script (`metrolist-page-visibility.js`) runs inside YouTube's player frames only and keeps reporting the page as visible and focused. The app's own page keeps the real state (it saves your position when it goes to the background).
+2. **A media notification keeps the app alive.** While music plays, a foreground service shows a notification with the cover, previous / play-pause / next and a seek bar; the same controls work on the lock screen and from Bluetooth / headset buttons. Pausing keeps the notification so you can resume from it; unplugging headphones pauses; swiping the app away from recents stops the music.
+3. **Ads are blocked** (see the table above).
+
+**Notification permission (Android 13 and newer):** the first time you play a song, the app asks once to show notifications. Saying no is fine: music still plays in the background, there is just no visible notification (and no notification controls). You can turn it on later in **Settings → Apps → Metrolist → Notifications**.
+
+Requirements: Android 5.1 or newer; the visibility trick needs an up-to-date **Android System WebView** (on an old WebView the app logs it and still keeps the notification and ad blocking).
+
+**What to check on a phone** (this part is tested on a simulated bridge and compiled in CI, not yet on a device):
+- Play a song, press Home, lock the screen: the music continues for several songs (the next song starts on its own).
+- The notification and lock screen show the title, artist and cover; play / pause / next / previous and dragging the seek bar work; so do Bluetooth headset buttons.
+- Unplug wired headphones (or disconnect Bluetooth audio): playback pauses.
+- Pause, wait a minute, resume from the notification: it plays again.
+- Swipe the app away from recents: the music stops and the notification disappears.
+- Android 13+: the permission prompt appears once at the first play; with "Don't allow" music still plays.
+- No video ads before or between songs; `adb logcat -s MetrolistAdBlock` shows blocked requests.
 
 ---
 

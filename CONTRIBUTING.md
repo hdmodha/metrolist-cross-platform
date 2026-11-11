@@ -97,9 +97,12 @@ On a Mac without a Developer ID certificate, sign ad-hoc like CI does, or Apple 
 The release workflow (`.github/workflows/release-native-builds.yml`) builds both installers, smoke-tests the packaged apps on real macOS and Windows runners and attaches the installers to the release. Run it manually with **publish** unticked to test-build a branch without creating a release.
 
 ### Android (`.apk`) & iOS (`.ipa` / Xcode) via Capacitor
+Capacitor 6, as the release workflow uses. `npm install` already linked the local plugin
+`native/capacitor-background-playback` (Android background play and ad blocking); `cap sync` adds it to
+the Android project. The generated `android/` and `ios/` folders are not committed.
 ```bash
 npm run build
-npm install --no-save @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
+npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/ios@6
 npx cap add android
 npx cap add ios
 npx cap sync
