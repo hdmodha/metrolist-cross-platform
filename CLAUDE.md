@@ -20,10 +20,10 @@ A platform that cannot have a change is **named, with the reason, in the commit 
 |---|---|---|---|
 | Web, desktop browsers | `npm test`, `npm run lint`, `npm run build`, `npm run test:e2e` (desktop project), both server smoke starts | PR CI (`deploy-pages.yml`): unit, typecheck, build, e2e; release: the portable archive starts | Safari / Firefox specifics (CI runs Chromium only) |
 | Web, mobile browsers | `npm run test:e2e` phone, small-phone, landscape-phone, tablet projects (Chromium emulation) | PR CI e2e | iOS Safari / Android Chrome autoplay and background-tab behaviour |
-| Electron, Linux | `xvfb-run -a npm run test:electron`; `npm run desktop:pack` + smoke test | PR CI Electron suite | a real window manager (Xvfb has none: minimise is simulated) |
-| Electron, macOS / Windows | — | release `build-desktop-installers`: packaged smoke test; macOS `codesign --verify`, `lipo` (arm64 + x86_64) | media keys, minimise / hide, Gatekeeper / SmartScreen prompts |
-| Android | `npm test` (JS mapping, shared vectors), `e2e/native.spec.ts` (simulated bridge); with a JDK, the plugin's pure Java + JUnit compile with `javac` | release `build-mobile-bundles`: `cap sync` + `native:prepare --check`, `assembleDebug`, plugin JUnit (ad-block + guard vectors), APK dex / merged-layout checks | background play on Home and with the screen off, notification / lock screen / Bluetooth, the permission prompt, ad blocking (README "What to check on a phone") |
-| iOS | `npm test`, `e2e/native.spec.ts` (iOS shell) | release `build-ios-app`: Swift guard vs the shared vectors, WebKit compile of the content-blocker list, `cap sync ios` + `native:prepare --check`, simulator `xcodebuild` | background audio, lock screen / remote commands, the YouTube embed from the `capacitor://` origin |
+| Electron, Linux | `xvfb-run -a npm run test:electron`; `npm run desktop:pack` + smoke test | PR CI Electron suite; release `build-desktop-installers`: AppImage + `.deb` (x64, arm64), packaged x64 smoke test under xvfb (`--no-sandbox`) | a real window manager (Xvfb has none: minimise is simulated); the arm64 packages are not run anywhere |
+| Electron, macOS / Windows | — | release `build-desktop-installers`: packaged smoke test; macOS `codesign --verify`, `lipo` (arm64 + x86_64); Windows NSIS installers for x64 and arm64 | media keys, minimise / hide, Gatekeeper / SmartScreen prompts, Windows on ARM |
+| Android | `npm test` (JS mapping, shared vectors), `e2e/native.spec.ts` (simulated bridge); with a JDK, the plugin's pure Java + JUnit compile with `javac` | release `build-mobile-bundles`: version from the tag, `cap sync` + `native:prepare --check`, plugin JUnit (ad-block + guard vectors), APK dex / merged-layout checks; signed `-android.apk` + `.aab` with the `ANDROID_KEY*` secrets, else `-android-debug.apk` | background play on Home and with the screen off, notification / lock screen / Bluetooth, the permission prompt, ad blocking (README "What to check on a phone") |
+| iOS | `npm test`, `e2e/native.spec.ts` (iOS shell) | release `build-ios-app`: Swift guard vs the shared vectors, WebKit compile of the content-blocker list, `cap sync ios` + `native:prepare --check`, simulator `xcodebuild`; release: unsigned device `-ios-unsigned.ipa` (Release, `CODE_SIGNING_ALLOWED=NO`, version from the tag) | background audio, lock screen / remote commands, the YouTube embed from the `capacitor://` origin, the sideloaded `.ipa` (AltStore / Sideloadly) |
 | Layouts (phone, tablet, desktop) | `npm run test:e2e` (`layout.spec.ts` on all five projects) | PR CI | — |
 
 ---
@@ -60,7 +60,7 @@ A platform that cannot have a change is **named, with the reason, in the commit 
   METROLIST_SMOKE_TEST=1 npx electron .  # start-up self-check: PASS / FAIL line, exit 0 / 1, 45 s timeout
   npm run test:electron                  # Playwright `_electron` suite (Linux: `xvfb-run -a npm run test:electron`)
   npm run desktop:pack                   # electron-builder, unpacked app for this OS (release/, git-ignored)
-  npm run desktop:dist                   # installers for this OS: universal .dmg (macOS), NSIS setup .exe (Windows)
+  npm run desktop:dist                   # installers for this OS: universal .dmg (macOS), NSIS setup .exe per arch (Windows), AppImage + .deb per arch (Linux)
   ```
 - **Generated native artifacts (after editing `src/shared/adBlock.ts`, `adBlockVectors.ts`, `webkitContentBlocker.ts` or `systemPauseGuardVectors.ts`)**:
   ```bash
@@ -127,7 +127,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   ├── storageMigration.ts                # One-time move of the data saved under http://127.0.0.1:<port> (≤ 1.1.0) into http://localhost:<port>, before the main window loads
 │   └── policies/                          # Pure, test-first: navigation (allow / external / deny), permissions, ports (fixed + fallback), appOrigin (page URL on localhost, legacy-data rules), windowState (clamp), smokeTest
 ├── e2e-electron/                          # Playwright `_electron` suite (playwright.electron.config.ts; NOT part of test:e2e)
-├── electron-builder.yml                   # Packaging: files (dist/, dist-electron/, package.json only), universal dmg, NSIS per-user, Linux dir
+├── electron-builder.yml                   # Packaging: files (dist/, dist-electron/, package.json only), universal dmg, NSIS per-user (x64 + arm64), AppImage + deb (x64 + arm64)
 ├── build/icon.png                         # 1024 px app icon (electron-builder derives .icns / .ico; the rest of build/ is ignored)
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
 ├── src/
@@ -202,8 +202,8 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   ├── fixtures/                          # test.ts (hermetic routes incl. `/api/innertube/embeddable` via `api.embeddable` + MetrolistApp driver), fakeYouTube.ts (`errorIds`, `readyDelayMs`, `probeUrls`, `lateErrorOnSwitch`, `getVideoData`, `loaded` history), apiFixtures.ts, storage.ts (seeded saved data), ports.ts
 │   └── *.spec.ts                          # search, navigation, nowplaying, library, playback, queue, resilience, persistence, performance, native (no backend + simulated BackgroundPlayback plugin), layout
 └── .github/workflows/
-    ├── deploy-pages.yml                   # CI on pull requests into main only (not again on the merge push): unit tests, typecheck, build, Playwright e2e, Electron suite
-    └── release-native-builds.yml          # Multi-OS release pipeline: Web, macOS + Windows installers, Android APK (native:prepare, JUnit, dex / layout checks), iOS (build-ios-app on macOS: Swift vectors, WebKit rule compile, simulator xcodebuild, prepared Xcode project)
+    ├── deploy-pages.yml                   # CI on pull requests into main only (not again on the merge push): `changes` (docs-only PRs skip the rest), then parallel unit-and-typecheck, browser-e2e, desktop-electron; `build-and-test` is the one required check
+    └── release-native-builds.yml          # Multi-OS release pipeline: Web, macOS universal .dmg, Windows NSIS (x64 + arm64), Linux AppImage + .deb (x64 + arm64), Android APK/AAB (signed with secrets, else debug; JUnit, dex / layout checks), iOS (build-ios-app on macOS: Swift vectors, WebKit rule compile, simulator xcodebuild, unsigned .ipa, prepared Xcode project); publish adds SHA256SUMS.txt and a downloads table
 ```
 
 ---
@@ -324,6 +324,8 @@ When debugging or improving the application, prioritize checking these areas:
    - With the secrets `CSC_LINK` (base64 `.p12` Developer ID Application) + `CSC_KEY_PASSWORD`, the certificate is found automatically and the default hardened runtime is used; with `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` it is also notarized (`MacTargetHelper.getNotarizeOptions`). Users then no longer need "Open Anyway".
    - CI proves the mac build with `codesign --verify --deep --strict`, `codesign -dv`, `lipo -archs` (arm64 + x86_64) and the packaged smoke test; Windows with the packaged `win-unpacked/Metrolist.exe` smoke test (the verdict is written to `METROLIST_SMOKE_TEST_REPORT`; the exit code decides).
    - Windows: NSIS, x64, one-click per-user install in `%LOCALAPPDATA%\Programs\Metrolist` (no admin), Start-menu + desktop shortcuts, uninstaller, keeps app data on uninstall. Not code-signed (SmartScreen "More info → Run anyway"); `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` secrets would sign it. Installer, uninstaller and exe icons come from `build/icon.png`.
+   - Windows on ARM: a second NSIS installer, `Metrolist-<v>-win-arm64-setup.exe` (`nsis.buildUniversalInstaller: false`, one per arch). CI runs the smoke test on the x64 build only.
+   - Linux: AppImage and `.deb`, each for x64 and arm64 (`Metrolist-<v>-linux-<arch>.<ext>`; AppImage arch names x86_64 / arm64, deb amd64 / arm64). The `.deb` maintainer is "Metrolist contributors" (no e-mail in `package.json` on purpose). CI smoke-tests the x64 unpacked app under `xvfb-run` with `--no-sandbox` (Ubuntu 24.04 AppArmor).
 
 4. **Full-Length Duration Preservation**:
    - Never overwrite a track's `durationMs` with a 30-second preview duration (`PREVIEW_DURATION_MS`). Keep the full duration parsed from InnerTube (`ytTrack.durationMs`) or reported by `YouTubeStreamBridge.onTimeUpdateMs`.

@@ -12,12 +12,12 @@ Every change is implemented and verified for: **web** (desktop and mobile browse
 
 | Platform | Run locally | What CI proves | Needs a real device / machine |
 |---|---|---|---|
-| Web, desktop browsers | `npm test`, `npm run lint`, `npm run build`, `npm run test:e2e`, server smoke starts | PR CI: unit, typecheck, build, e2e | Safari / Firefox specifics |
+| Web, desktop browsers | `npm test`, `npm run lint`, `npm run build`, `npm run test:e2e`, server smoke starts | PR CI (`deploy-pages.yml`, parallel jobs): unit, typecheck, build, e2e; docs-only PRs skip them; the required check is `build-and-test` | Safari / Firefox specifics |
 | Web, mobile browsers | `npm run test:e2e` (phone, small-phone, landscape-phone, tablet) | PR CI e2e | iOS Safari / Android Chrome autoplay, background tabs |
-| Electron, Linux | `xvfb-run -a npm run test:electron`, `npm run desktop:pack` + smoke | PR CI Electron suite | a real window manager |
-| Electron, macOS / Windows | — | release: packaged smoke tests, macOS signature + architectures | media keys, minimise / hide |
-| Android | `npm test`, `e2e/native.spec.ts`; pure Java + JUnit with plain `javac` | release `build-mobile-bundles`: `native:prepare --check`, `assembleDebug`, plugin JUnit, APK dex + merged-layout checks | background play (Home, screen off), notification, lock screen, Bluetooth, permission prompt, ads |
-| iOS | `npm test`, `e2e/native.spec.ts` (iOS shell) | release `build-ios-app`: Swift guard vectors, WebKit compile of the content-blocker list, `native:prepare --check`, simulator `xcodebuild` | background audio, lock screen, remote commands, the YouTube embed's origin |
+| Electron, Linux | `xvfb-run -a npm run test:electron`, `npm run desktop:pack` + smoke | PR CI Electron suite; release: AppImage + `.deb` (x64, arm64), packaged x64 smoke test under xvfb | a real window manager; arm64 packages not run anywhere |
+| Electron, macOS / Windows | — | release: packaged smoke tests, macOS signature + architectures; Windows NSIS installers for x64 and arm64 | media keys, minimise / hide, Windows on ARM |
+| Android | `npm test`, `e2e/native.spec.ts`; pure Java + JUnit with plain `javac` | release `build-mobile-bundles`: version from the tag, `native:prepare --check`, `assembleDebug` or signed `assembleRelease` + `bundleRelease`, plugin JUnit, APK dex + merged-layout checks | background play (Home, screen off), notification, lock screen, Bluetooth, permission prompt, ads |
+| iOS | `npm test`, `e2e/native.spec.ts` (iOS shell) | release `build-ios-app`: Swift guard vectors, WebKit compile of the content-blocker list, `native:prepare --check`, simulator `xcodebuild`, unsigned device `.ipa` | background audio, lock screen, remote commands, the YouTube embed's origin, sideloaded `.ipa` |
 | Layouts | `npm run test:e2e` (`layout.spec.ts`, five projects) | PR CI | — |
 
 ---

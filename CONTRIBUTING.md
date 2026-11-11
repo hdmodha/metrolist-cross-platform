@@ -84,8 +84,8 @@ Packaging uses electron-builder (`electron-builder.yml`, icons from `build/icon.
 
 ```bash
 npm run desktop:pack   # unpacked app for this OS (release/mac-universal/Metrolist.app, release/win-unpacked/, release/linux-unpacked/)
-npm run desktop:dist   # installers for this OS: universal .dmg on macOS, NSIS setup .exe on Windows
-                       # (Linux is not shipped; there it only builds the unpacked app)
+npm run desktop:dist   # installers for this OS: universal .dmg on macOS, NSIS setup .exe per arch (x64, arm64)
+                       # on Windows, AppImage + .deb per arch (x64, arm64) on Linux
 
 # Check the packaged app starts
 METROLIST_SMOKE_TEST=1 release/mac-universal/Metrolist.app/Contents/MacOS/Metrolist      # macOS
