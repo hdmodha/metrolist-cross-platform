@@ -203,10 +203,15 @@ jobs:
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
 
-  # 3. Build Android (.apk) & iOS Project Bundle via Capacitor
+  # 3a. Android (.apk) via Capacitor 6. `npm run native:prepare` installs Metrolist's MainActivity
+  #     (native/android-app/MainActivity.java), whose WebView keeps playing when the app is
+  #     minimised; the job proves the APK carries it.
   build-mobile-bundles:
     needs: verify-and-bundle-web
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -222,8 +227,8 @@ jobs:
           distribution: "temurin"
           java-version: "21"
 
-      # The local Capacitor plugin (native/capacitor-background-playback: Android background play and
-      # ad blocking) is a `file:` devDependency, so this install links it into node_modules/@metrolist/
+      # The local Capacitor plugin (native/capacitor-background-playback: background play and ad
+      # blocking) is a `file:` devDependency, so this install links it into node_modules/@metrolist/
       # before `cap sync` looks for plugins.
       - name: Install dependencies & build web assets
         run: |
@@ -232,45 +237,163 @@ jobs:
           test -f node_modules/@metrolist/capacitor-background-playback/package.json
           npm run build
 
-      - name: Generate Android & iOS Native Capacitor Projects & Build APK
+      - name: Generate & prepare the Android project, build the APK
         run: |
-          npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/ios@6
+          npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           npx cap add android
-          npx cap add ios
-          npx cap sync
-          mkdir -p release-mobile
-          if [ -d "android" ]; then
-            # cap sync must have registered the local plugin (Gradle module :metrolist-capacitor-background-playback)
-            grep -q '"com.metrolist.backgroundplayback.BackgroundPlaybackPlugin"' android/app/src/main/assets/capacitor.plugins.json
-            grep -q "metrolist-capacitor-background-playback" android/capacitor.settings.gradle
-            if [ -n "$ANDROID_HOME" ]; then
-              echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-            elif [ -d "/usr/local/lib/android/sdk" ]; then
-              echo "sdk.dir=/usr/local/lib/android/sdk" > android/local.properties
-            fi
-            chmod +x android/gradlew
-            # The plugin's JUnit test runs the ad-block vectors shared with the TypeScript tests
-            (cd android && ./gradlew assembleDebug :metrolist-capacitor-background-playback:testDebugUnitTest --no-daemon)
-            # The APK carries the plugin's assets (page-visibility script, ad-block rules)
-            unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/metrolist-page-visibility.js'
-            unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/metrolist-ad-block-rules.json'
-            cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
-            7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+          npx cap sync android
+          # Installs Metrolist's MainActivity over the generated one (fails if it is not Capacitor's default)
+          npm run native:prepare
+          npm run native:prepare -- --check
+          grep -q 'com.metrolist.backgroundplayback.R.layout.metrolist_bridge_layout_main' android/app/src/main/java/com/metrolist/music/MainActivity.java
+          # cap sync must have registered the local plugin (Gradle module :metrolist-capacitor-background-playback)
+          grep -q '"com.metrolist.backgroundplayback.BackgroundPlaybackPlugin"' android/app/src/main/assets/capacitor.plugins.json
+          grep -q "metrolist-capacitor-background-playback" android/capacitor.settings.gradle
+          if [ -n "$ANDROID_HOME" ]; then
+            echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          elif [ -d "/usr/local/lib/android/sdk" ]; then
+            export ANDROID_HOME=/usr/local/lib/android/sdk
+            echo "sdk.dir=$ANDROID_HOME" > android/local.properties
           fi
-          if [ -d "ios" ]; then
-            7z a -tzip release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json
-          fi
+          chmod +x android/gradlew
+          # The plugin's JUnit tests run the ad-block and system-pause-guard vectors shared with the TypeScript tests
+          (cd android && ./gradlew assembleDebug :metrolist-capacitor-background-playback:testDebugUnitTest --no-daemon)
 
-      - name: Upload Mobile Native Artifacts (Android APK + iOS Xcode Bundle)
+      - name: Archive the APK and the Android Studio project
+        run: |
+          mkdir -p release-mobile
+          cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
+          7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+
+      - name: Upload Android Artifacts (APK + Android Studio project)
         uses: actions/upload-artifact@v4
         with:
           name: metrolist-mobile-native
           path: release-mobile/*
 
+      # After the upload on purpose: the APK can be tried even if a check fails, and the job still fails.
+      - name: Verify the APK (background-playback WebView, layout, plugin assets)
+        run: |
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          # The plugin's assets (page-visibility script, ad-block rules)
+          unzip -l "$apk" | grep -q 'assets/metrolist-page-visibility.js'
+          unzip -l "$apk" | grep -q 'assets/metrolist-ad-block-rules.json'
+          # The dex files carry the WebView subclass and the app's MainActivity
+          unzip -p "$apk" 'classes*.dex' > "$RUNNER_TEMP/classes.dex.bin"
+          grep -a -q 'Lcom/metrolist/backgroundplayback/BackgroundPlaybackWebView;' "$RUNNER_TEMP/classes.dex.bin"
+          grep -a -q 'Lcom/metrolist/music/MainActivity;' "$RUNNER_TEMP/classes.dex.bin"
+          # The merged layout inflates the subclass with Capacitor's @id/webview
+          layout="$(unzip -Z1 "$apk" | grep -E '^res/layout[^/]*/metrolist_bridge_layout_main\.xml$' | head -1)"
+          test -n "$layout" || { echo "metrolist_bridge_layout_main.xml is not in the APK" >&2; unzip -Z1 "$apk" | grep '^res/layout' | head -50; exit 1; }
+          aapt2="$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sort -V | tail -1)aapt2"
+          if [ -x "$aapt2" ]; then
+            "$aapt2" dump xmltree --file "$layout" "$apk" | tee "$RUNNER_TEMP/layout.txt"
+            ids="$("$aapt2" dump resources "$apk" | grep -E ' id/webview( |$)' || true)"
+          else
+            analyzer="$sdk/cmdline-tools/latest/bin/apkanalyzer"
+            "$analyzer" resources xml --file "$layout" "$apk" | tee "$RUNNER_TEMP/layout.txt"
+            ids=""
+          fi
+          grep -q 'com.metrolist.backgroundplayback.BackgroundPlaybackWebView' "$RUNNER_TEMP/layout.txt"
+          if grep -q 'com.getcapacitor.CapacitorWebView' "$RUNNER_TEMP/layout.txt"; then
+            echo "the swapped layout still uses CapacitorWebView" >&2
+            exit 1
+          fi
+          # Only one id/webview resource exists, and the layout uses it (when aapt2 printed both)
+          echo "id/webview: $ids"
+          webview_id="$(printf '%s\n' "$ids" | grep -oE '0x7f[0-9a-f]{6}' | head -1)"
+          if [ -n "$webview_id" ]; then
+            test "$(printf '%s\n' "$ids" | grep -c 'id/webview')" -eq 1
+            grep -q -e "=@$webview_id" -e '@id/webview' -e '@+id/webview' "$RUNNER_TEMP/layout.txt" || { echo "the layout's id is not @id/webview ($webview_id)" >&2; exit 1; }
+          fi
+
+  # 3b. iOS via Capacitor 6 (CocoaPods): the prepared Xcode project, compiled for the simulator
+  #     without signing. Proves the Swift plugin compiles against Capacitor 6, the WebKit
+  #     content-blocker list compiles, and the Swift guard passes the shared vectors. Not a device
+  #     test: background audio and the lock screen still need a phone.
+  build-ios-app:
+    needs: verify-and-bundle-web
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # CLAUDE.md §5 (lockfile handling): macOS installs without the lockfile, with npm 11
+      - name: Install dependencies & build web assets
+        run: |
+          rm -f package-lock.json
+          npx -y npm@11.21.1 install --legacy-peer-deps
+          test -f node_modules/@metrolist/capacitor-background-playback/package.json
+          npm run build
+
+      - name: Run the shared vectors against the Swift guard
+        working-directory: native/capacitor-background-playback
+        run: |
+          swiftc ios/Plugin/SystemPauseGuard.swift ios/Tests/main.swift -o "$RUNNER_TEMP/guard-vectors"
+          "$RUNNER_TEMP/guard-vectors" android/src/test/resources/system-pause-guard-vectors.json
+
+      - name: Generate & prepare the iOS project
+        run: |
+          npx -y npm@11.21.1 install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/ios@6
+          npx cap add ios
+          npx cap sync ios
+          # Adds UIBackgroundModes audio to Info.plist
+          npm run native:prepare
+          npm run native:prepare -- --check
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' ios/App/App/Info.plist | grep -q audio
+          # cap sync must have added the local plugin's pod and registered its class
+          grep -q "pod 'MetrolistCapacitorBackgroundPlayback'" ios/App/Podfile
+          grep -q 'MetrolistCapacitorBackgroundPlayback' ios/App/Podfile.lock
+          grep -q '"BackgroundPlaybackPlugin"' ios/App/App/capacitor.config.json
+
+      - name: Compile the iOS app for the simulator (no signing)
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/ios-derived" CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/xcodebuild.log" 2>&1 \
+            || { tail -200 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+          tail -20 "$RUNNER_TEMP/xcodebuild.log"
+          app="$RUNNER_TEMP/ios-derived/Build/Products/Debug-iphonesimulator/App.app"
+          test -d "$app"
+          # The plugin's framework with its resources, and background audio
+          find "$app" -type d -name 'MetrolistCapacitorBackgroundPlayback.framework' | grep -q .
+          find "$app" -name 'metrolist-content-blocker.json' | grep -q .
+          find "$app" -name 'metrolist-page-visibility.js' | grep -q .
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$app/Info.plist" | grep -qx audio
+
+      - name: Archive the prepared Xcode project
+        run: |
+          mkdir -p release-mobile
+          7z a -tzip release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json -xr'!build'
+
+      - name: Upload iOS Artifact (prepared Xcode project)
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrolist-ios-native
+          path: release-mobile/*
+
+      # After the upload on purpose: the artifact exists even if this check fails, and the job still fails.
+      # WebKit's own compiler (macOS, same content-extension parser as iOS) must accept the generated list,
+      # or the app would run without ad blocking (it logs the compile error).
+      - name: Compile the content-blocker list with WebKit
+        working-directory: native/capacitor-background-playback
+        timeout-minutes: 5
+        run: swift ios/Tests/compile-content-blocker.swift ios/Resources/metrolist-content-blocker.json
+
   # 4. Publish All Platform Builds to GitHub Releases
   # Skipped for a manual run with "publish" unticked (artifacts are still uploaded to the run).
   publish-github-release:
-    needs: [verify-and-bundle-web, build-desktop-installers, build-mobile-bundles]
+    needs: [verify-and-bundle-web, build-desktop-installers, build-mobile-bundles, build-ios-app]
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     steps:

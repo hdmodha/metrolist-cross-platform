@@ -4,7 +4,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
-import com.getcapacitor.Logger;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,7 +25,6 @@ final class ArtworkLoader {
         void onArtwork(String url, Bitmap bitmap);
     }
 
-    private static final String TAG = "MetrolistArtwork";
     static final int MAX_BYTES = 2 * 1024 * 1024;
     private static final int TARGET_SIZE_PX = 512;
     private static final int TIMEOUT_MS = 10000;
@@ -77,7 +75,7 @@ final class ArtworkLoader {
             if (bytes == null) return null;
             return decodeScaled(bytes);
         } catch (IOException | RuntimeException e) {
-            Logger.debug(TAG, "Cover not loaded: " + e.getMessage());
+            MetrolistLog.w("Cover not loaded: " + e);
             return null;
         } finally {
             if (connection != null) connection.disconnect();

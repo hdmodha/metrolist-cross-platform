@@ -35,8 +35,30 @@ const DIRECT_ATTEMPT_TIMEOUT_MS = 8000;
 const DIRECT_BUDGET_MS = 20000;
 const DEFAULT_RADIO_SEED_VIDEO_ID = 'a5uQMwRMHcs';
 
-/** Repeated searches (and artist-chip switches) are answered instantly from memory. */
-const searchCache = new LruTtlCache<InnerTubeParsedTrack[]>({ maxEntries: 30, ttlMs: 5 * 60 * 1000 });
+/**
+ * How long a search answer stays fresh. Long enough that coming back to the Search tab after
+ * listening for a while shows the same results at once, without a request; song search results do
+ * not change within that time.
+ */
+export const SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/** Repeated searches (and artist-chip switches, returning to the Search tab) are answered from memory. */
+const searchCache = new LruTtlCache<InnerTubeParsedTrack[]>({ maxEntries: 30, ttlMs: SEARCH_CACHE_TTL_MS });
+
+function searchCacheKey(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+/** The fresh cached answer for `query`, synchronously (`null` = it needs a request). */
+export function peekSearchResults(query: string): InnerTubeParsedTrack[] | null {
+  const key = searchCacheKey(query);
+  return key ? (searchCache.get(key, Date.now()) ?? null) : null;
+}
+
+/** Tests only: forget every cached search. */
+export function resetSearchCache(): void {
+  searchCache.clear();
+}
 
 /** Embeddability answers per video id (`true` / `false`), and recently inconclusive checks. */
 const embeddabilityCache = new LruTtlCache<boolean>({ maxEntries: 2000, ttlMs: 6 * 60 * 60 * 1000 });
@@ -229,7 +251,7 @@ export async function searchTracks(
   const trimmed = query.trim();
   if (!trimmed) return [];
 
-  const cacheKey = trimmed.toLowerCase();
+  const cacheKey = searchCacheKey(trimmed);
   const cached = searchCache.get(cacheKey, Date.now());
   if (cached) return cached;
 

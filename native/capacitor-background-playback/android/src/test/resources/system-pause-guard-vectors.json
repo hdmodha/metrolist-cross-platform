@@ -1,0 +1,572 @@
+{
+  "description": "Generated from src/shared/systemPauseGuardVectors.ts by `npm run adblock:rules`; do not edit. Events in order; every `update` step carries the decision (`resume` / `none`) the guard must take. Java (SystemPauseGuardTest) and Swift (CI vector runner) run them like the TypeScript reference.",
+  "windowMs": 2500,
+  "cases": [
+    {
+      "name": "the player pauses itself right after the app went to the background: resume once",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1800
+          },
+          "expect": "resume"
+        }
+      ]
+    },
+    {
+      "name": "buffering counts as wanting playback",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "buffering",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 10
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 900
+          },
+          "expect": "resume"
+        }
+      ]
+    },
+    {
+      "name": "exactly at the end of the window still resumes",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 3500
+          },
+          "expect": "resume"
+        }
+      ]
+    },
+    {
+      "name": "a pause after the window is the listener's business: no resume",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 3501
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "only once per background episode: a second system pause stands",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1500
+          },
+          "expect": "resume"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 1700
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 2000
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a pause the listener asked for (in the app) is never fought",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "user",
+            "at": 1200
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "an update without pausedBy counts as the listener's pause",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "at": 1200
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a pause from the notification / lock screen / headset disarms the guard",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "userCommand",
+            "action": "pause",
+            "at": 1100
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1300
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "other commands (next, seek) leave it armed",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "userCommand",
+            "action": "next",
+            "at": 1100
+          }
+        },
+        {
+          "event": {
+            "type": "userCommand",
+            "action": "seekTo",
+            "at": 1150
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1300
+          },
+          "expect": "resume"
+        }
+      ]
+    },
+    {
+      "name": "already paused when the app went to the background: nothing to protect",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "user",
+            "at": 500
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1200
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "nothing reported yet when the app went to the background: no resume",
+      "steps": [
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1200
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a player pause while the app is in the foreground is not the system's",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 500
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "back in the foreground: the episode ends, a later pause is not resumed",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "foreground",
+            "at": 1200
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1400
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a new background episode may resume once again",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1500
+          },
+          "expect": "resume"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 1600
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "foreground",
+            "at": 5000
+          }
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 9000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 9500
+          },
+          "expect": "resume"
+        }
+      ]
+    },
+    {
+      "name": "a repeated background signal keeps the first time (onStop after the window was hidden)",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 3500
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 3501
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a pause that is not resumed ends the episode even if playback restarts",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "user",
+            "at": 1100
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 1200
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 1300
+          },
+          "expect": "none"
+        }
+      ]
+    },
+    {
+      "name": "a clock going backwards never resumes",
+      "steps": [
+        {
+          "event": {
+            "type": "update",
+            "state": "playing",
+            "at": 0
+          },
+          "expect": "none"
+        },
+        {
+          "event": {
+            "type": "background",
+            "at": 1000
+          }
+        },
+        {
+          "event": {
+            "type": "update",
+            "state": "paused",
+            "pausedBy": "player",
+            "at": 999
+          },
+          "expect": "none"
+        }
+      ]
+    }
+  ]
+}

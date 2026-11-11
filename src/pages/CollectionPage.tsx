@@ -75,6 +75,7 @@ export const CollectionPage = React.memo(function CollectionPage({ kind, tracks,
       <div className={`-mx-[var(--page-px)] -mt-[max(1.25rem,env(safe-area-inset-top))] short:-mt-[max(0.75rem,env(safe-area-inset-top))] lg:-mt-6 px-[var(--page-px)] pt-[max(1.25rem,env(safe-area-inset-top))] short:pt-[max(0.75rem,env(safe-area-inset-top))] lg:pt-6 pb-6 short:pb-4 bg-gradient-to-b ${copy.header} to-transparent`}>
         <NavLink
           to={{ name: 'library' }}
+          intent="tab"
           aria-label="Back to Your Library"
           className="lg:hidden short:hidden tap-target -ml-2 mb-1 inline-flex items-center justify-center w-10 h-10 rounded-full text-white hover:bg-white/10"
         >

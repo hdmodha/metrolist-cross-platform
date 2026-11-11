@@ -1,31 +1,33 @@
 import React from 'react';
 import { House, LibraryBig, Search } from 'lucide-react';
+import { getTabMemory } from '../app/navigationMemory';
 import type { Route } from '../app/router';
+import { tabOf, tabTarget, type TabName } from '../app/tabMemory';
 import { countRender } from '../utils/renderProbe';
 import { NavLink } from './NavLink';
 
 export const MAIN_TABS = [
-  { label: 'Home', icon: House, to: { name: 'home' } as Route, matches: (r: Route) => r.name === 'home' },
-  { label: 'Search', icon: Search, to: { name: 'search', query: '' } as Route, matches: (r: Route) => r.name === 'search' },
-  {
-    label: 'Library',
-    icon: LibraryBig,
-    to: { name: 'library' } as Route,
-    matches: (r: Route) => r.name === 'library' || r.name === 'liked' || r.name === 'downloads',
-  },
-] as const;
+  { label: 'Home', icon: House, tab: 'home' },
+  { label: 'Search', icon: Search, tab: 'search' },
+  { label: 'Library', icon: LibraryBig, tab: 'library' },
+] as const satisfies ReadonlyArray<{ label: string; icon: typeof House; tab: TabName }>;
 
-/** Phones and tablets: Home · Search · Library tabs along the bottom edge. */
+/**
+ * Phones and tablets: Home · Search · Library tabs along the bottom edge. Each tab links to where a
+ * press leads: its last location, or its root when it is the current tab (`tabMemory.ts`).
+ */
 export const BottomNav = React.memo(function BottomNav({ route }: { route: Route }) {
   countRender('BottomNav');
+  const memory = getTabMemory();
   return (
     <nav aria-label="Main" className="h-[var(--nav-h)] grid grid-cols-3">
-      {MAIN_TABS.map(({ label, icon: Icon, to, matches }) => {
-        const current = matches(route);
+      {MAIN_TABS.map(({ label, icon: Icon, tab }) => {
+        const current = tabOf(route) === tab;
         return (
           <NavLink
             key={label}
-            to={to}
+            to={tabTarget(memory, route, tab)}
+            tab={tab}
             current={current}
             className={`flex flex-col short:flex-row items-center justify-center gap-1 short:gap-2 text-[11px] short:text-xs font-medium transition-colors ${
               current ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Capacitor's bridge_layout_main.xml (@capacitor/android 6) with Metrolist's WebView, which keeps
+  playing when the app is minimised (BackgroundPlaybackWebView). The app's MainActivity
+  (native/android-app/MainActivity.java, installed by `npm run native:prepare`) inflates this layout
+  instead of Capacitor's. The id stays @id/webview: resource ids share one namespace in the app, so
+  Capacitor's Bridge finds the WebView as usual.
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context="com.getcapacitor.BridgeActivity">
+
+    <com.metrolist.backgroundplayback.BackgroundPlaybackWebView
+        android:id="@+id/webview"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

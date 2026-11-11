@@ -2,7 +2,7 @@
   "name": "@metrolist/capacitor-background-playback",
   "version": "1.0.0",
   "private": true,
-  "description": "Metrolist's local Capacitor plugin for Android: background play of the YouTube IFrame player (page-visibility override, media-playback foreground service + media notification) and ad blocking in the WebView.",
+  "description": "Metrolist's local Capacitor plugin for Android and iOS: background play of the YouTube IFrame player (a WebView kept visible while music plays, page-visibility override, media-playback foreground service / audio session with media notification and lock-screen controls) and ad blocking in the WebView.",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -12,11 +12,17 @@
   "files": [
     "src/",
     "android/build.gradle",
-    "android/src/main/"
+    "android/src/main/",
+    "ios/Plugin/",
+    "ios/Resources/",
+    "MetrolistCapacitorBackgroundPlayback.podspec"
   ],
   "capacitor": {
     "android": {
       "src": "android"
+    },
+    "ios": {
+      "src": "ios"
     }
   }
 }

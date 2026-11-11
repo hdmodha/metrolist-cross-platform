@@ -11,7 +11,8 @@ import { SERVER_PORT, STATIC_PORT } from './e2e/fixtures/ports';
 const isCI = !!process.env.CI;
 
 const phone = devices['Pixel 7'];
-const LAYOUT_SPEC = /layout\.spec\.ts$/;
+/** Specs that run on every device class (the rest: phone + desktop). */
+const ALL_DEVICES_SPEC = /(layout|tabs)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: './e2e',
@@ -49,17 +50,17 @@ export default defineConfig({
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
     {
       name: 'small-phone',
-      testMatch: LAYOUT_SPEC,
+      testMatch: ALL_DEVICES_SPEC,
       use: { ...phone, viewport: { width: 320, height: 568 } },
     },
     {
       name: 'landscape-phone',
-      testMatch: LAYOUT_SPEC,
+      testMatch: ALL_DEVICES_SPEC,
       use: { ...phone, viewport: { width: 915, height: 412 } },
     },
     {
       name: 'tablet',
-      testMatch: LAYOUT_SPEC,
+      testMatch: ALL_DEVICES_SPEC,
       use: { ...phone, viewport: { width: 768, height: 1024 }, deviceScaleFactor: 2 },
     },
   ],

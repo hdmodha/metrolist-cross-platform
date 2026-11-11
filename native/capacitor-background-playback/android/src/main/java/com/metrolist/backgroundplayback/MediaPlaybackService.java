@@ -9,7 +9,6 @@ import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
-import com.getcapacitor.Logger;
 
 /**
  * Foreground service of type mediaPlayback that keeps the app (and the WebView playing YouTube's
@@ -27,7 +26,6 @@ import com.getcapacitor.Logger;
  */
 public class MediaPlaybackService extends Service {
 
-    private static final String TAG = "MetrolistPlayback";
     /** Locks are re-acquired on every foreground entry; the timeout only guards against a leak. */
     private static final long LOCK_TIMEOUT_MS = 3 * 60 * 60 * 1000L;
 
@@ -66,9 +64,12 @@ public class MediaPlaybackService extends Service {
                 startForeground(PlaybackController.NOTIFICATION_ID, notification);
             }
         } catch (RuntimeException e) {
-            Logger.warn(TAG, "startForeground refused: " + e.getMessage());
+            // ForegroundServiceStartNotAllowedException (Android 12+, an IllegalStateException) or a
+            // missing permission: the controller still posts the notification
+            MetrolistLog.w("startForeground refused" + (foreground ? " (was in the foreground)" : "") + ": " + e);
             return false;
         }
+        if (!foreground) MetrolistLog.i("Foreground service started (mediaPlayback)");
         foreground = true;
         acquireLocks();
         return true;
@@ -79,6 +80,7 @@ public class MediaPlaybackService extends Service {
         releaseLocks();
         if (!foreground) return;
         foreground = false;
+        MetrolistLog.i("Foreground service left the foreground (paused; notification kept)");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(Service.STOP_FOREGROUND_DETACH);
         } else {
@@ -88,6 +90,7 @@ public class MediaPlaybackService extends Service {
 
     /** Stops for good: notification removed, locks released. */
     void shutDown() {
+        MetrolistLog.i("Foreground service stopped");
         releaseLocks();
         foreground = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -106,6 +109,7 @@ public class MediaPlaybackService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         // The listener closed the app from recents: stop playing, as other music players do
+        MetrolistLog.i("App removed from recents: stopping");
         PlaybackController.get(this).onTaskRemoved();
         super.onTaskRemoved(rootIntent);
     }
@@ -138,7 +142,7 @@ public class MediaPlaybackService extends Service {
             }
             if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
         } catch (RuntimeException e) {
-            Logger.warn(TAG, "Locks not acquired: " + e.getMessage());
+            MetrolistLog.w("Locks not acquired: " + e);
         }
     }
 
@@ -147,7 +151,7 @@ public class MediaPlaybackService extends Service {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
             if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         } catch (RuntimeException e) {
-            Logger.warn(TAG, "Locks not released: " + e.getMessage());
+            MetrolistLog.w("Locks not released: " + e);
         }
     }
 }

@@ -1,6 +1,7 @@
 /**
  * A tiny hash router (no dependency): `#/`, `#/search?q=…`, `#/library`, `#/library/liked`,
- * `#/library/downloads`. Hash routes work unchanged in the Capacitor WebView, on static hosts and in
+ * `#/library/downloads`, and the hidden debug log `#/debug` (no link in the navigation; a long
+ * press on the version in Library opens it). Hash routes work unchanged in the Capacitor WebView, on static hosts and in
  * the desktop bundles, and need no server fallback. Unknown routes fall back to Home.
  *
  * `parseRoute` / `formatRoute` are pure; `navigate` and `subscribeToLocation` wrap the History API.
@@ -11,7 +12,8 @@ export type Route =
   | { name: 'search'; query: string }
   | { name: 'library' }
   | { name: 'liked' }
-  | { name: 'downloads' };
+  | { name: 'downloads' }
+  | { name: 'debug' };
 
 export type RouteName = Route['name'];
 
@@ -39,6 +41,8 @@ export function parseRoute(hash: string): Route {
       return { name: 'liked' };
     case '/library/downloads':
       return { name: 'downloads' };
+    case '/debug':
+      return { name: 'debug' };
     default:
       return { name: 'home' };
   }
@@ -58,6 +62,8 @@ export function formatRoute(route: Route): string {
       return '#/library/liked';
     case 'downloads':
       return '#/library/downloads';
+    case 'debug':
+      return '#/debug';
   }
 }
 
@@ -83,18 +89,46 @@ function notify(): void {
   for (const listener of [...listeners]) listener();
 }
 
+/**
+ * Why the location last changed, for the scroll rules in `tabMemory.ts`: `push` (a link),
+ * `replace` (refining a search), `pop` (Back / Forward), `tab` (a tab switch or a desktop library
+ * shortcut), `retap` (the current tab pressed again) or `boot` (the app started on it).
+ */
+export type NavigationIntent = 'boot' | 'push' | 'replace' | 'pop' | 'tab' | 'retap';
+
+let lastNavigation: { hash: string; intent: NavigationIntent } | null = null;
+/** The intent of the Back the app itself triggers next (`backAs`). */
+let nextPopIntent: NavigationIntent | null = null;
+
+function onPopState(): void {
+  lastNavigation = { hash: currentHash(), intent: nextPopIntent ?? 'pop' };
+  nextPopIntent = null;
+  notify();
+}
+
+/** The intent of the navigation that led to `hash` (anything the app did not start counts as `pop`). */
+export function navigationIntentFor(hash: string): NavigationIntent {
+  return lastNavigation && lastNavigation.hash === hash ? lastNavigation.intent : 'pop';
+}
+
+/** `history.back()`, with the arrival treated as `intent` (e.g. a re-tap that goes back over an entry). */
+export function backAs(intent: NavigationIntent): void {
+  nextPopIntent = intent;
+  window.history.back();
+}
+
 /** Calls `listener` whenever the route may have changed (hash change, Back / Forward, `navigate`). */
 export function subscribeToLocation(listener: () => void): () => void {
   if (listeners.size === 0 && typeof window !== 'undefined') {
     window.addEventListener('hashchange', notify);
-    window.addEventListener('popstate', notify);
+    window.addEventListener('popstate', onPopState);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && typeof window !== 'undefined') {
       window.removeEventListener('hashchange', notify);
-      window.removeEventListener('popstate', notify);
+      window.removeEventListener('popstate', onPopState);
     }
   };
 }
@@ -115,19 +149,24 @@ export function historyFlags(): HistoryFlags {
 }
 
 /**
- * Goes to `route`. A push creates one history entry (and scrolls to the top); `replace` swaps the
- * current entry (typing in the search box, leaving Now Playing). `flags` are stored on the entry.
+ * Goes to `route`. A push creates one history entry; `replace` swaps the current entry (typing in
+ * the search box, leaving Now Playing). `flags` are stored on the entry. `intent` (default: `replace`
+ * or `push`) tells the scroll rules what kind of visit this is; they scroll, not this function.
  */
-export function navigate(route: Route, options: { replace?: boolean; flags?: HistoryFlags } = {}): void {
+export function navigate(
+  route: Route,
+  options: { replace?: boolean; flags?: HistoryFlags; intent?: NavigationIntent } = {}
+): void {
   const url = formatRoute(route);
   const flags = options.flags ?? null;
   const effect = options.replace || flags ? null : navigationEffect(route, window.location.hash);
   if (effect === 'none') return;
+  nextPopIntent = null;
+  lastNavigation = { hash: url, intent: options.intent ?? (options.replace ? 'replace' : 'push') };
   if (options.replace || effect === 'replace') {
     window.history.replaceState(options.replace ? flags : historyFlags(), '', url);
   } else {
     window.history.pushState(flags, '', url);
-    window.scrollTo(0, 0);
   }
   notify();
 }

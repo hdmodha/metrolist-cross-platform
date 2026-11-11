@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatRoute, isSameRoute, navigationEffect, parseRoute, type Route } from './router';
+import { formatRoute, isSameRoute, navigationEffect, navigationIntentFor, parseRoute, type Route } from './router';
 
 describe('parseRoute', () => {
   test('the five pages', () => {
@@ -10,6 +10,12 @@ describe('parseRoute', () => {
     assert.deepEqual(parseRoute('#/library'), { name: 'library' });
     assert.deepEqual(parseRoute('#/library/liked'), { name: 'liked' });
     assert.deepEqual(parseRoute('#/library/downloads'), { name: 'downloads' });
+  });
+
+  test('the hidden debug log', () => {
+    assert.deepEqual(parseRoute('#/debug'), { name: 'debug' });
+    assert.deepEqual(parseRoute('#/debug/'), { name: 'debug' });
+    assert.deepEqual(parseRoute('#/DEBUG'), { name: 'home' });
   });
 
   test('an empty hash, a missing slash or a trailing slash still work', () => {
@@ -48,6 +54,7 @@ describe('formatRoute', () => {
     assert.equal(formatRoute({ name: 'library' }), '#/library');
     assert.equal(formatRoute({ name: 'liked' }), '#/library/liked');
     assert.equal(formatRoute({ name: 'downloads' }), '#/library/downloads');
+    assert.equal(formatRoute({ name: 'debug' }), '#/debug');
   });
 
   test('queries are encoded so every character survives a round trip', () => {
@@ -82,5 +89,12 @@ describe('navigationEffect', () => {
   test('another page is pushed', () => {
     assert.equal(navigationEffect({ name: 'library' }, ''), 'push');
     assert.equal(navigationEffect({ name: 'search', query: 'x' }, '#/search'), 'push');
+  });
+});
+
+describe('navigationIntentFor', () => {
+  test('a location the app did not navigate to itself counts as Back / Forward (restore its scroll)', () => {
+    assert.equal(navigationIntentFor('#/library'), 'pop');
+    assert.equal(navigationIntentFor(''), 'pop');
   });
 });

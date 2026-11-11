@@ -5,7 +5,9 @@ import {
   fetchRadioContinuation,
   fetchRecommendations,
   peekEmbeddability,
+  peekSearchResults,
   resetEmbeddabilityCache,
+  resetSearchCache,
   searchTracks,
 } from './apiClient';
 
@@ -54,6 +56,18 @@ test('searchTracks caches answers by trimmed, lower-cased query', async () => {
   assert.deepEqual(second, first);
   assert.equal(urls.length, 1);
   assert.ok(urls[0].startsWith('/api/innertube/search?q='));
+});
+
+test('peekSearchResults answers synchronously from the search cache (returning to the Search tab)', async () => {
+  resetSearchCache();
+  const urls = stubFetch(async () => json({ tracks: [track('ccccccccccc')] }));
+  assert.equal(peekSearchResults('Peek Me'), null);
+  const tracks = await searchTracks('Peek Me');
+  assert.equal(peekSearchResults('  peek me '), tracks);
+  assert.equal(peekSearchResults(''), null);
+  assert.equal(urls.length, 1);
+  resetSearchCache();
+  assert.equal(peekSearchResults('peek me'), null);
 });
 
 test('searchTracks never caches empty or failed answers', async () => {

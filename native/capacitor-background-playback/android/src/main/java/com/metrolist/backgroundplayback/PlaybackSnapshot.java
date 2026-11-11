@@ -17,7 +17,24 @@ final class PlaybackSnapshot {
             if ("buffering".equals(value)) return BUFFERING;
             return PAUSED;
         }
+
+        /** The value the page sends ({@code playing} / {@code buffering} / {@code paused}). */
+        String wireName() {
+            switch (this) {
+                case PLAYING:
+                    return "playing";
+                case BUFFERING:
+                    return "buffering";
+                default:
+                    return "paused";
+            }
+        }
     }
+
+    /** The page paused because the listener asked (the default). */
+    static final String PAUSED_BY_USER = "user";
+    /** The YouTube player paused itself (possibly the system pausing a backgrounded page). */
+    static final String PAUSED_BY_PLAYER = "player";
 
     private static final int MAX_TEXT_LENGTH = 300;
     private static final int MAX_URL_LENGTH = 2048;
@@ -31,6 +48,8 @@ final class PlaybackSnapshot {
     final long durationMs;
     final long positionMs;
     final State state;
+    /** Paused only: {@link #PAUSED_BY_PLAYER} or {@link #PAUSED_BY_USER} (anything else). */
+    final String pausedBy;
     /** {@code SystemClock.elapsedRealtime()} when the position was reported. */
     final long reportedAtElapsedMs;
 
@@ -42,6 +61,7 @@ final class PlaybackSnapshot {
         double durationMs,
         double positionMs,
         String state,
+        String pausedBy,
         long reportedAtElapsedMs
     ) {
         this.title = text(title);
@@ -52,6 +72,7 @@ final class PlaybackSnapshot {
         long position = millis(positionMs);
         this.positionMs = this.durationMs > 0 ? Math.min(position, this.durationMs) : position;
         this.state = State.parse(state);
+        this.pausedBy = PAUSED_BY_PLAYER.equals(pausedBy) ? PAUSED_BY_PLAYER : PAUSED_BY_USER;
         this.reportedAtElapsedMs = reportedAtElapsedMs;
     }
 
@@ -63,6 +84,7 @@ final class PlaybackSnapshot {
         this.durationMs = base.durationMs;
         this.positionMs = positionMs;
         this.state = state;
+        this.pausedBy = PAUSED_BY_USER;
         this.reportedAtElapsedMs = reportedAtElapsedMs;
     }
 

@@ -1,6 +1,12 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import type { BackgroundPlaybackPlugin, BackgroundPlaybackUpdate } from '@metrolist/capacitor-background-playback';
+import {
+  createBackgroundPlayback,
+  parseNativeDebugLog,
+  type BackgroundPlaybackPlugin,
+  type BackgroundPlaybackUpdate,
+  type CapacitorBridgeGlobal,
+} from '@metrolist/capacitor-background-playback';
 import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import { createPlaybackClock } from '../player/playbackClock';
 import { createInitialPlayerState, playerReducer, selectActiveTrack, type PlayerState } from '../player/playerCore';
@@ -9,6 +15,7 @@ import {
   POSITION_SYNC_INTERVAL_MS,
   commandToPlayerCall,
   connectBackgroundPlayback,
+  lifecycleToPlayerEffect,
   planBackgroundSync,
   playbackStateFor,
   toBackgroundUpdate,
@@ -73,6 +80,15 @@ describe('mapping the player to the notification', () => {
     assert.equal(toBackgroundUpdate(createInitialPlayerState(), 0), null);
   });
 
+  test('a pause says who paused (the listener, or the player itself); playing never carries it', () => {
+    const state = playing();
+    assert.equal(toBackgroundUpdate(state, 0)?.pausedBy, undefined);
+    assert.equal(toBackgroundUpdate(state, 0, 'player')?.pausedBy, undefined, 'only with paused');
+    const paused = playerReducer(state, { type: 'setPlaying', playing: false });
+    assert.equal(toBackgroundUpdate(paused, 0)?.pausedBy, 'user');
+    assert.equal(toBackgroundUpdate(paused, 0, 'player')?.pausedBy, 'player');
+  });
+
   test('only http(s) artwork is handed to the native side', () => {
     let state = playing();
     const id = state.activeTrackId!;
@@ -100,6 +116,8 @@ describe('when to send an update', () => {
     assert.equal(planBackgroundSync(last, update({ durationMs: 210000 }), 1100), 'send');
     assert.equal(planBackgroundSync(last, update({ state: 'paused', positionMs: 10100 }), 1100), 'send');
     assert.equal(planBackgroundSync(last, update({ state: 'buffering', positionMs: 10100 }), 1100), 'send');
+    const pausedByUser = sent(update({ state: 'paused', pausedBy: 'user' }));
+    assert.equal(planBackgroundSync(pausedByUser, update({ state: 'paused', pausedBy: 'player' }), 1100), 'send');
   });
 
   test('while playing, the position is re-sent at most every 5 seconds', () => {
@@ -130,6 +148,10 @@ describe('commands from the notification, lock screen and headset', () => {
     assert.deepEqual(commandToPlayerCall({ action: 'seekTo', positionMs: 42000.4 }), { kind: 'seekTo', ms: 42000 });
   });
 
+  test('the plugin\'s one play after a system pause plays like any other', () => {
+    assert.deepEqual(commandToPlayerCall({ action: 'play', reason: 'systemPause' }), { kind: 'setPlaying', playing: true });
+  });
+
   test('anything malformed is ignored', () => {
     for (const bad of [null, undefined, 'play', 42, {}, { action: 'stop' }, { action: 'seekTo' }, { action: 'seekTo', positionMs: -1 }, { action: 'seekTo', positionMs: Number.NaN }, { action: 'seekTo', positionMs: '5' }]) {
       assert.equal(commandToPlayerCall(bad), null, JSON.stringify(bad));
@@ -137,11 +159,51 @@ describe('commands from the notification, lock screen and headset', () => {
   });
 });
 
+describe('the app leaving and returning to the foreground', () => {
+  test('pause / stop save the player (the page may stay "visible" and get no visibilitychange)', () => {
+    assert.equal(lifecycleToPlayerEffect({ state: 'pause' }), 'save');
+    assert.equal(lifecycleToPlayerEffect({ state: 'stop' }), 'save');
+    assert.equal(lifecycleToPlayerEffect({ state: 'resume' }), 'none');
+    for (const bad of [null, 'pause', {}, { state: 'explode' }, { state: 3 }]) assert.equal(lifecycleToPlayerEffect(bad), null, JSON.stringify(bad));
+  });
+});
+
+describe('the plugin on each platform', () => {
+  const shell = (platform: string, native = true): CapacitorBridgeGlobal => ({
+    isNativePlatform: () => native,
+    getPlatform: () => platform,
+    nativePromise: async () => ({ entries: [{ at: 5, level: 'warn', message: 'hello' }] }),
+    addListener: () => ({ remove: () => undefined }),
+  });
+
+  test('Android and iOS shells get the plugin; the web, desktop and other shells do not', () => {
+    assert.equal(createBackgroundPlayback(shell('android'))?.platform, 'android');
+    assert.equal(createBackgroundPlayback(shell('ios'))?.platform, 'ios');
+    assert.equal(createBackgroundPlayback(shell('web', false)), null);
+    assert.equal(createBackgroundPlayback(shell('android', false)), null);
+    assert.equal(createBackgroundPlayback(shell('electron')), null);
+    assert.equal(createBackgroundPlayback(undefined), null);
+    assert.equal(createBackgroundPlayback({ isNativePlatform: () => true, getPlatform: () => 'ios' }), null);
+  });
+
+  test('the native debug log is validated', async () => {
+    assert.deepEqual(await createBackgroundPlayback(shell('ios'))!.getDebugLog(), [{ at: 5, level: 'warn', message: 'hello' }]);
+    assert.deepEqual(parseNativeDebugLog(null), []);
+    assert.deepEqual(parseNativeDebugLog({ entries: 'x' }), []);
+    assert.deepEqual(
+      parseNativeDebugLog({ entries: [null, { at: 'x', message: 'a' }, { at: 1, message: 2 }, { at: 2, level: 'loud', message: 'ok' }] }),
+      [{ at: 2, level: 'info', message: 'ok' }]
+    );
+  });
+});
+
 /** A plugin that records calls and lets the test fire commands. */
 function fakePlugin() {
   const calls: Array<{ method: string; update?: BackgroundPlaybackUpdate }> = [];
   let listener: ((command: unknown) => void) | null = null;
+  let lifecycleListener: ((event: unknown) => void) | null = null;
   const plugin: BackgroundPlaybackPlugin = {
+    platform: 'android',
     update: async (u) => {
       calls.push({ method: 'update', update: u });
     },
@@ -152,10 +214,17 @@ function fakePlugin() {
       calls.push({ method: 'ensureNotificationPermission' });
       return { granted: true };
     },
+    getDebugLog: async () => [],
     addCommandListener: (l) => {
       listener = l;
       return () => {
         listener = null;
+      };
+    },
+    addLifecycleListener: (l) => {
+      lifecycleListener = l;
+      return () => {
+        lifecycleListener = null;
       };
     },
   };
@@ -164,7 +233,8 @@ function fakePlugin() {
     calls,
     updates: () => calls.filter((c) => c.method === 'update').map((c) => c.update!),
     fire: (command: unknown) => listener?.(command),
-    hasListener: () => listener !== null,
+    fireLifecycle: (event: unknown) => lifecycleListener?.(event),
+    hasListener: () => listener !== null || lifecycleListener !== null,
   };
 }
 
@@ -192,8 +262,38 @@ function harness(initial: PlayerState) {
     },
   };
   const fake = fakePlugin();
-  const disconnect = connectBackgroundPlayback({ plugin: fake.plugin, store, clock, actions, now: () => now });
-  return { store, clock, fake, recorded, disconnect, advance: (ms: number) => (now += ms) };
+  let origin: 'user' | 'player' = 'user';
+  const logged: string[] = [];
+  let saves = 0;
+  const disconnect = connectBackgroundPlayback({
+    plugin: fake.plugin,
+    store,
+    clock,
+    actions,
+    now: () => now,
+    pauseOrigin: () => origin,
+    onSave: () => saves++,
+    log: (message) => logged.push(message),
+  });
+  return {
+    store,
+    clock,
+    fake,
+    recorded,
+    logged,
+    saves: () => saves,
+    disconnect,
+    advance: (ms: number) => (now += ms),
+    /** Dispatches as the YouTube player pausing / playing by itself (usePlayer's onExternalPlayPause). */
+    asPlayer: (fn: () => void) => {
+      origin = 'player';
+      try {
+        fn();
+      } finally {
+        origin = 'user';
+      }
+    },
+  };
 }
 
 describe('connecting the player to the plugin', () => {
@@ -275,14 +375,50 @@ describe('connecting the player to the plugin', () => {
     assert.equal(h.fake.calls.length, count);
   });
 
+  test('a pause the player made itself is reported as such, and stays so until playback resumes', () => {
+    const h = harness(playing());
+    h.asPlayer(() => h.store.dispatch({ type: 'setPlaying', playing: false }));
+    assert.equal(h.fake.updates().at(-1)!.state, 'paused');
+    assert.equal(h.fake.updates().at(-1)!.pausedBy, 'player');
+    h.clock.setPositionMs(60000);
+    assert.equal(h.fake.updates().at(-1)!.positionMs, 60000);
+    assert.equal(h.fake.updates().at(-1)!.pausedBy, 'player', 'a later position update keeps who paused');
+    h.fake.fire({ action: 'play', reason: 'systemPause' });
+    assert.equal(h.store.getState().isPlaying, true);
+    assert.equal(h.fake.updates().at(-1)!.pausedBy, undefined);
+    h.store.dispatch({ type: 'setPlaying', playing: false });
+    assert.equal(h.fake.updates().at(-1)!.pausedBy, 'user', 'the app\'s own pause');
+    assert.ok(h.logged.some((l) => /Command from the plugin: play \(systemPause\)/.test(l)), h.logged.join('|'));
+    assert.ok(h.logged.some((l) => /To the plugin: paused \(by player\)/.test(l)), h.logged.join('|'));
+    h.disconnect();
+  });
+
+  test('the app going to the background saves the player; resume and malformed events do not', () => {
+    const h = harness(playing());
+    h.fake.fireLifecycle({ state: 'pause' });
+    h.fake.fireLifecycle({ state: 'stop' });
+    assert.equal(h.saves(), 2);
+    h.fake.fireLifecycle({ state: 'resume' });
+    h.fake.fireLifecycle({ nope: true });
+    assert.equal(h.saves(), 2);
+    assert.ok(h.logged.includes('App lifecycle: stop'));
+    h.disconnect();
+    assert.equal(h.fake.hasListener(), false);
+    h.fake.fireLifecycle({ state: 'stop' });
+    assert.equal(h.saves(), 2);
+  });
+
   test('a plugin call that fails never breaks the player', async () => {
     const store = createPlayerStore(createInitialPlayerState());
     const clock = createPlaybackClock(0);
     const failing: BackgroundPlaybackPlugin = {
+      platform: 'android',
       update: () => Promise.reject(new Error('bridge gone')),
       stop: () => Promise.reject(new Error('bridge gone')),
       ensureNotificationPermission: () => Promise.reject(new Error('bridge gone')),
+      getDebugLog: () => Promise.reject(new Error('bridge gone')),
       addCommandListener: () => () => undefined,
+      addLifecycleListener: () => () => undefined,
     };
     const noop = () => undefined;
     const disconnect = connectBackgroundPlayback({

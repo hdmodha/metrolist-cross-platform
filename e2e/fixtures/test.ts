@@ -8,6 +8,8 @@
  * Page errors and console errors fail the test too.
  */
 import { test as base, expect, type BrowserContext, type Locator, type Page, type Route } from '@playwright/test';
+import { parseRoute } from '../../src/app/router';
+import { isTabRoot, tabOf, type TabName } from '../../src/app/tabMemory';
 import type { InnerTubeParsedTrack } from '../../src/utils/metrolistCore';
 import { fixtureVideoId, pageOfContinuation, radioPage, searchResultsFor } from './apiFixtures';
 import { FAKE_YOUTUBE_IFRAME_API, type FakePlayerDebug, type FakeYouTubeOptions } from './fakeYouTube';
@@ -119,6 +121,8 @@ export async function installRoutes(target: Pick<BrowserContext, 'route'>, api: 
   });
 }
 
+const TAB_OF_LABEL: Record<'Home' | 'Search' | 'Library', TabName> = { Home: 'home', Search: 'search', Library: 'library' };
+
 /** What `open({ storage })` writes to localStorage before the app first loads (raw strings). */
 export type SeedStorage = Record<string, string>;
 
@@ -136,7 +140,8 @@ export class MetrolistApp {
         if (yt) w.__yt = { ...yt };
         if (renderProbe) w.__renderProbe = {};
         // Seed storage once per tab: a reload must see what the app saved, not the seed again
-        if (storage && !sessionStorage.getItem('__e2eSeeded')) {
+        // (not on about:blank, which has no storage: Back out of the app lands there)
+        if (storage && location.protocol.startsWith('http') && !sessionStorage.getItem('__e2eSeeded')) {
           sessionStorage.setItem('__e2eSeeded', '1');
           for (const [key, value] of Object.entries(storage)) localStorage.setItem(key, value);
         }
@@ -165,14 +170,29 @@ export class MetrolistApp {
   tab(name: 'Home' | 'Search' | 'Library'): Locator {
     return this.nav.getByRole('link', { name, exact: true });
   }
+  /** The tab the current location belongs to. */
+  async currentTab(): Promise<TabName> {
+    return tabOf(parseRoute(await this.hash()));
+  }
+  /** Presses a main tab: another tab returns to where it was left (its last page / query). */
   async goTo(name: 'Home' | 'Search' | 'Library'): Promise<void> {
     await this.closeNowPlaying();
     await this.tab(name).click();
+    await expect.poll(() => this.currentTab()).toBe(TAB_OF_LABEL[name]);
+    // (the desktop sidebar marks Liked Songs / Downloads with their own shortcut, not the tab)
+    if (!this.isDesktop || isTabRoot(parseRoute(await this.hash()))) await expect(this.tab(name)).toHaveAttribute('aria-current', 'page');
+  }
+  /** The tab's root page (Home, the empty Search page, Your Library): pressed again if needed. */
+  async goToRoot(name: 'Home' | 'Search' | 'Library'): Promise<void> {
+    await this.goTo(name);
+    if (isTabRoot(parseRoute(await this.hash()))) return;
+    await this.tab(name).click();
+    await expect.poll(async () => isTabRoot(parseRoute(await this.hash()))).toBe(true);
     await expect(this.tab(name)).toHaveAttribute('aria-current', 'page');
   }
   /** Opens Liked Songs / Downloads from the Library page. */
   async openCollection(name: 'Liked Songs' | 'Downloads'): Promise<void> {
-    await this.goTo('Library');
+    await this.goToRoot('Library');
     await this.main.getByRole('link', { name: new RegExp(`^${name}`) }).click();
     await expect(this.heading).toHaveText(name);
   }
