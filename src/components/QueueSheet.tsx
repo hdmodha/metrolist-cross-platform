@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowDown, ArrowUp, X } from 'lucide-react';
 import type { MetrolistTrack } from '../data/track';
+import { unplayableShortReason, type UnplayableReason } from '../player/streamErrors';
 import { countRender } from '../utils/renderProbe';
 import { Artwork } from './Artwork';
 import { PlayingBars } from './PlayingBars';
@@ -9,6 +10,8 @@ interface QueueSheetProps {
   id: string;
   /** The whole queue in play order (played songs, the current one, upcoming ones). */
   queue: MetrolistTrack[];
+  /** Songs the player found it cannot play: marked "Unavailable" (they are jumped over). */
+  unplayableTracks: Readonly<Record<string, UnplayableReason>>;
   activeTrackId: string;
   isPlaying: boolean;
   autoplayRadio: boolean;
@@ -27,25 +30,33 @@ interface QueueRowProps {
   track: MetrolistTrack;
   isFirst: boolean;
   isLast: boolean;
+  unavailableReason?: UnplayableReason;
   onPlay: (trackId: string) => void;
   onMove: (trackId: string, direction: -1 | 1) => void;
   onRemove: (trackId: string) => void;
 }
 
-const QueueRow = React.memo(function QueueRow({ track, isFirst, isLast, onPlay, onMove, onRemove }: QueueRowProps) {
+const QueueRow = React.memo(function QueueRow({ track, isFirst, isLast, unavailableReason, onPlay, onMove, onRemove }: QueueRowProps) {
+  const label = `Play ${track.title} by ${track.artist}`;
   return (
     <li className="song-row flex items-center gap-1 rounded-md hover:bg-white/[0.06]">
       <button
         type="button"
         onClick={() => onPlay(track.id)}
-        aria-label={`Play ${track.title} by ${track.artist}`}
+        aria-label={unavailableReason ? `${label}. Unavailable: ${unplayableShortReason(unavailableReason)}` : label}
+        title={unavailableReason ? unplayableShortReason(unavailableReason) : undefined}
         className="flex flex-1 min-w-0 items-center gap-3 py-1.5 pl-1 text-left cursor-pointer rounded-md"
       >
-        <Artwork src={track.coverUrl} className="w-10 h-10 rounded shrink-0" />
-        <span className="min-w-0">
+        <Artwork src={track.coverUrl} className={`w-10 h-10 rounded shrink-0 ${unavailableReason ? 'opacity-50' : ''}`} />
+        <span className={`min-w-0 flex-1 ${unavailableReason ? 'opacity-50' : ''}`}>
           <span className="song-title block truncate text-sm font-medium text-white">{track.title}</span>
           <span className="block truncate text-xs text-zinc-400 mt-0.5">{track.artist}</span>
         </span>
+        {unavailableReason && (
+          <span className="song-unavailable shrink-0 rounded-full border border-white/20 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
+            Unavailable
+          </span>
+        )}
       </button>
       <button type="button" aria-label={`Move ${track.title} up in queue`} disabled={isFirst} onClick={() => onMove(track.id, -1)} className={smallButton}>
         <ArrowUp className="w-4 h-4" />
@@ -64,6 +75,7 @@ const QueueRow = React.memo(function QueueRow({ track, isFirst, isLast, onPlay, 
 export const QueueSheet = React.memo(function QueueSheet({
   id,
   queue,
+  unplayableTracks,
   activeTrackId,
   isPlaying,
   autoplayRadio,
@@ -137,6 +149,7 @@ export const QueueSheet = React.memo(function QueueSheet({
                 track={track}
                 isFirst={idx === 0}
                 isLast={idx === upcoming.length - 1}
+                unavailableReason={unplayableTracks[track.id]}
                 onPlay={onPlayQueueItem}
                 onMove={onMoveQueueItem}
                 onRemove={onRemoveQueueItem}

@@ -102,6 +102,35 @@ test.describe('resilience', () => {
     expect(await app.ytLoadedVideoIds()).not.toContain(blocked);
   });
 
+  test('a song found unplayable shows as unavailable in the search results; a tap explains it and does not start it', async ({ app, api }) => {
+    const blocked = fixtureVideoId('search:queen bohemian:2');
+    api.embeddable = (id) => id !== blocked;
+    api.search = (query) => (query === 'Queen Queen Bohemian Part 3' ? { body: { tracks: [] } } : defaultSearch(query));
+    await app.open();
+    await app.searchAndPlayFirst('queen bohemian');
+    const queued = await app.chooseFromTrackMenu(app.results, 2, 'Add to queue');
+    await expect.poll(() => api.searches).toContain('Queen Queen Bohemian Part 3');
+
+    const row = app.resultRows().nth(2);
+    await expect(row).toContainText('Unavailable');
+    await expect(row).toHaveAttribute('aria-label', /Unavailable: Its owner doesn’t allow playback outside YouTube/);
+    await expect(row.locator('.song-title')).toHaveText(queued);
+    await expect(app.resultRows().nth(1)).not.toContainText('Unavailable');
+    expect(await row.locator('span.opacity-50').count(), 'the song is dimmed').toBeGreaterThan(0);
+
+    const playing = await app.currentTitle.textContent();
+    await row.click();
+    await expect(app.notice).toHaveText(`“${queued}” can’t be played outside YouTube: its owner turned that off.`);
+    await expect(app.currentTitle).toHaveText(playing ?? '');
+    expect(await app.ytLoadedVideoIds()).not.toContain(blocked);
+
+    // The queue marks it too (it will be jumped over)
+    await app.openQueue();
+    const queuedRow = app.queue.locator('ul[aria-label="Next up"] li').filter({ hasText: queued });
+    await expect(queuedRow).toContainText('Unavailable');
+    await expect(queuedRow.getByRole('button', { name: /Unavailable: Its owner doesn’t allow playback outside YouTube/ })).toBeVisible();
+  });
+
   test('a search result found to be blocked while it starts is replaced at play time', async ({ app, api }) => {
     const blocked = fixtureVideoId('search:daft punk one more time:0');
     const alternate = fixtureVideoId('search:daft daft punk one more time:0');

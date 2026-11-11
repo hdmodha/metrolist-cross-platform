@@ -88,3 +88,17 @@ function unplayableReasonText(title: string, reason: UnplayableReason): string {
       return `“${title}” can’t be played here.`;
   }
 }
+
+/** A short, one-line reason shown on a song in a list that is known not to play (and in its accessible name). */
+export function unplayableShortReason(reason: UnplayableReason = 'unknown'): string {
+  switch (reason) {
+    case 'embedDisabled':
+      return 'Its owner doesn’t allow playback outside YouTube';
+    case 'unavailable':
+      return 'Removed from YouTube or private';
+    case 'invalidVideo':
+      return 'No playable video on YouTube';
+    default:
+      return 'Can’t be played here';
+  }
+}
