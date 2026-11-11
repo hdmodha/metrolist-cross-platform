@@ -19,6 +19,8 @@ export interface FakeYouTubeOptions {
   durations?: Record<string, number>;
   /** Playback speed multiplier. */
   speed?: number;
+  /** How long a new player takes to become ready (default 60 ms; slow networks take seconds). */
+  readyDelayMs?: number;
   /**
    * URLs every new player requests from inside its iframe, like the real player's ad / stats
    * requests (the desktop suite checks which ones the ad blocker cancels). Outcomes land in `probes`.
@@ -77,6 +79,7 @@ export function installFakeYouTubeApi(): void {
   ctl.errorIds = ctl.errorIds || [];
   ctl.durations = ctl.durations || {};
   ctl.probeUrls = ctl.probeUrls || [];
+  ctl.readyDelayMs = ctl.readyDelayMs || 60;
   ctl.probes = {};
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
@@ -187,8 +190,9 @@ export function installFakeYouTubeApi(): void {
     setTimeout(() => {
       if (destroyed) return;
       if (opts.events.onReady) opts.events.onReady({ target: self });
-      if (opts.playerVars && opts.playerVars.autoplay) start();
-    }, 60);
+      // Autoplay, unless onReady already told the player what to do (cue, play, load)
+      if (opts.playerVars && opts.playerVars.autoplay && state === -1) start();
+    }, ctl.readyDelayMs);
   }
 
   ctl.current = () => {

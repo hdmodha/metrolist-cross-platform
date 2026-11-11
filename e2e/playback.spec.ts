@@ -36,6 +36,20 @@ test.describe('playback', () => {
     await expect.poll(() => app.ytState()).toBe(1);
   });
 
+  test('a pause while the player is still getting ready is kept: autoplay does not start the song anyway', async ({ app, page }) => {
+    await app.open({ yt: { readyDelayMs: 1500 } });
+    await app.search('slow network song');
+    await app.resultRows().first().click();
+    await app.showControls();
+    await app.pauseButton.click();
+    await expect(app.playButton).toBeVisible();
+    await page.waitForTimeout(2500); // the player becomes ready (and would autoplay) meanwhile
+    await expect(app.playButton).toBeVisible();
+    expect(await app.ytState()).not.toBe(1);
+    await app.playButton.click();
+    await expect.poll(() => app.ytState()).toBe(1);
+  });
+
   test('a pause from outside the app (headset, OS media key) is reflected in the UI', async ({ app }) => {
     await app.open();
     await app.searchAndPlayFirst('daft punk');

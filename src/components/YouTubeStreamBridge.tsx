@@ -241,8 +241,9 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
           const mountNode = document.createElement('div');
           host.replaceChildren(mountNode);
 
+          const autoplay = latest.current.isPlaying;
           const playerVars: Record<string, string | number> = {
-            autoplay: latest.current.isPlaying ? 1 : 0,
+            autoplay: autoplay ? 1 : 0,
             controls: 0,
             disablekb: 1,
             fs: 0,
@@ -276,6 +277,10 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                     else ev.target.cueVideoById(wanted, 0);
                   } else if (latest.current.isPlaying) {
                     ev.target.playVideo();
+                  } else if (autoplay) {
+                    // Paused while the player was still getting ready: cueing cancels the autoplay it
+                    // was created with (it would start the song anyway, and look like an external play)
+                    ev.target.cueVideoById(wanted, startSeconds);
                   }
                   const pendingSeek = pendingSeekRef.current;
                   if (pendingSeek) {
