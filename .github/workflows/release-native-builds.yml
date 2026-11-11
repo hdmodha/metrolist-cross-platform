@@ -10,6 +10,11 @@ on:
         description: "Release version tag (e.g. v1.0.0)"
         required: true
         default: "v1.0.0"
+      publish:
+        description: "Publish a GitHub Release (untick to only build and upload the artifacts, e.g. to test-build a branch)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -39,9 +44,27 @@ jobs:
       - name: Build production web bundle
         run: npm run build
 
+      # `npm run build` produced dist/ (frontend) and dist-server/server.mjs (the server with every
+      # dependency bundled), so the archive runs with Node.js alone: no npm install needed.
       - name: Archive Portable Web & Full-Stack Server Release
         run: |
-          7z a -tzip metrolist-portable-web-and-server.zip dist server.ts package.json Dockerfile README.md
+          7z a -tzip metrolist-portable-web-and-server.zip dist dist-server package.json README.md
+
+      - name: Verify the portable archive starts from a clean directory
+        run: |
+          tmp="$(mktemp -d)"
+          unzip -q metrolist-portable-web-and-server.zip -d "$tmp"
+          test ! -e "$tmp/node_modules"
+          (cd "$tmp" && PORT=3080 exec node dist-server/server.mjs > server.log 2>&1) &
+          server_pid=$!
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:3080/manifest.webmanifest && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://localhost:3080/
+          curl -sf -o /dev/null http://localhost:3080/manifest.webmanifest
+          cat "$tmp/server.log"
+          kill "$server_pid" || true
 
       - name: Upload Web & Server Artifact
         uses: actions/upload-artifact@v4
@@ -81,7 +104,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p release-desktop
-          7z a -tzip "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist server.ts package.json README.md
+          7z a -tzip "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist dist-server package.json README.md
 
       - name: Upload Desktop Artifact (${{ matrix.platform_name }})
         uses: actions/upload-artifact@v4
@@ -143,8 +166,10 @@ jobs:
           path: release-mobile/*
 
   # 4. Publish All Platform Builds to GitHub Releases
+  # Skipped for a manual run with "publish" unticked (artifacts are still uploaded to the run).
   publish-github-release:
     needs: [verify-and-bundle-web, build-desktop-native, build-mobile-bundles]
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     steps:
       - name: Download all platform build artifacts
