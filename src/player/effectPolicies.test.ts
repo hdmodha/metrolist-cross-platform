@@ -172,6 +172,14 @@ test('the search for other uploads names the artist, or uses an "A - B" title as
   assert.equal(alternateSearchQuery({ title: 'The Weeknd - Blinding Lights', artist: 'David Dean Burkhart' }), 'The Weeknd - Blinding Lights');
 });
 
+test('the search query uses only the first name of a comma-separated credit', () => {
+  assert.equal(
+    alternateSearchQuery({ title: 'Humsafar (Movie: Saiyaara)', artist: 'Sachet-Parampara, Sachet Tandon, Parampara Tandon & Irshad Kamil' }),
+    'Sachet-Parampara Humsafar'
+  );
+  assert.equal(alternateSearchQuery({ title: 'Humsafar', artist: 'Akhil Sachdeva & Mansheel Gujral' }), 'Akhil Sachdeva & Mansheel Gujral Humsafar');
+});
+
 test('the position is saved at most every 5 seconds', () => {
   assert.equal(isPositionSaveDue(null, 1000), true);
   assert.equal(isPositionSaveDue(1000, 5999), false);

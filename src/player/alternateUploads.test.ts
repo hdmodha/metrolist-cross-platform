@@ -162,3 +162,71 @@ describe('ranking and choosing', () => {
     assert.equal(chooseAlternateUpload([], known({})), null);
   });
 });
+
+describe('credit lists, title segments and more version markers', () => {
+  const A = { title: 'Humsafar', artist: 'Akhil Sachdeva & Mansheel Gujral', durationMs: 269000 };
+  const B = { title: 'Humsafar (Movie: Saiyaara)', artist: 'Sachet-Parampara, Sachet Tandon, Parampara Tandon & Irshad Kamil', durationMs: 323000 };
+  const C = { title: 'Humsafar', artist: 'Hadiqa Kiani', durationMs: 215000 };
+
+  test('a Bollywood upload with the movie and a bitrate in the title is accepted, wrong versions are not', () => {
+    const leo = candidate('Humsafar - Badrinath Ki Dulhania (2017) - Akhil Sachdeva & Mansheel Gujral - 320Kbps', 'Leo Studio 27', 269000);
+    const lyrical = candidate('Humsafar - Akhil Sachdeva (Lyrics) | Lyrical Bam Hindi', 'LYRICAL BAM HINDI', 223000);
+    const chipmunk = candidate("Akhil Sachdeva, Mansheel Gujral - Humsafar (From 'Badrinath Ki Dulhania') | Chipmunk Version", 'Chipmunked Music', 269000);
+    const slowed = candidate('Sun Mere Humsafar (Slowed + Reverb) | Akhil Sachdeva & Mansheel Gujral | Night Vibes 🎧', 'Veyofficial ツ', 245000);
+    const lofi = candidate('Humsafar (slowed+reverb) |Akhil Sachdeva,Mansheel Gujral |Varun,Alia Bhatt |"Badrinath ki Dulhania"', 'Lo-fi world', 269000);
+    const leoScore = scoreAlternateUpload(A, leo);
+    assert.ok(leoScore !== null && leoScore >= MIN_ALTERNATE_SCORE, `leo ${leoScore}`);
+    for (const c of [chipmunk, slowed, lofi]) {
+      const s = scoreAlternateUpload(A, c);
+      assert.ok(s === null || s < MIN_ALTERNATE_SCORE, `${c.title}: ${s}`);
+    }
+    const ranked = rankAlternateUploads(A, [chipmunk, slowed, lofi, lyrical, leo], []);
+    assert.equal(ranked[0].candidate.videoId, leo.videoId);
+  });
+
+  test('a credit list matches on any listed name; a lyric upload of a movie song is accepted', () => {
+    const good = candidate('Humsafar (Lyrics) - Sachet Tandon & Parampara Tandon | Saiyaara | New Heartbreak Romantic Song', 'cadence spot', 311000);
+    const score = scoreAlternateUpload(B, good);
+    assert.ok(score !== null && score >= MIN_ALTERNATE_SCORE, `score ${score}`);
+    const others = [
+      candidate('Lyrical | Humsafar Song | Saiyaara | Ahaan, Aneet | Sachet Tandon, Parampara Tandon, Irshad Kamil', 'Maza Beats', 398000),
+      candidate('Humsafar – Full Song | Saiyaara | Ahaan Panday | Aneet Padda | Sachet–Parampara | The Muzzic', 'THE MUZZIC', 192000),
+    ];
+    for (const c of others) assert.equal(scoreAlternateUpload(B, c), null);
+  });
+
+  test('another song of the same movie and singers never matches on the movie segment', () => {
+    const original = { title: 'Humsafar | Saiyaara | Sachet Tandon', artist: 'Sachet Tandon', durationMs: 300000 };
+    const other = candidate('Barbaad | Saiyaara | Sachet Tandon', 'Sachet Tandon', 300000);
+    const s = scoreAlternateUpload(original, other);
+    assert.ok(s === null || s < MIN_ALTERNATE_SCORE, `score ${s}`);
+  });
+
+  test('another singer with the same title stays rejected; the same singer scores high', () => {
+    const ost = candidate('Humsafar | OST by Qurat-ul-Ain Balouch | HUM Music', 'HUM Music', 225000);
+    const s = scoreAlternateUpload(C, ost);
+    assert.ok(s === null || s < MIN_ALTERNATE_SCORE, `ost ${s}`);
+    assert.equal(scoreAlternateUpload(C, candidate('Humsafar | Hadiqa Kiani', 'Hadiqa Kiani', 221000)), 100);
+  });
+
+  test('a single act named with "&" still matches, an en dash splits "Artist – Title"', () => {
+    const o = { title: 'The Sound of Silence', artist: 'Simon & Garfunkel', durationMs: 185000 };
+    const s = scoreAlternateUpload(o, candidate('Simon & Garfunkel – The Sound of Silence', 'Some Channel', 185000));
+    assert.ok(s !== null && s >= MIN_ALTERNATE_SCORE, `score ${s}`);
+  });
+
+  test('new version markers count', () => {
+    for (const t of ['Blinding Lights (Lo-Fi)', 'Blinding Lights lofi', 'Blinding Lights (Acoustic)', 'Blinding Lights Unplugged', 'Blinding Lights (Reprise)', 'Blinding Lights Female Version', 'Blinding Lights Bass Boosted', 'Blinding Lights Reverbed', 'Blinding Lights Ringtone', 'Blinding Lights Teaser']) {
+      const s = scoreAlternateUpload(ORIGINAL, candidate(t, 'The Weeknd'));
+      assert.ok(s !== null && s < MIN_ALTERNATE_SCORE, `${t}: ${s}`);
+    }
+  });
+
+  test('a song titled only with noise words still matches itself', () => {
+    const o = { title: 'Song 2', artist: 'Blur', durationMs: 122000 };
+    const s = scoreAlternateUpload(o, candidate('Blur - Song 2 (Official Video)', 'Blur', 122000));
+    assert.ok(s !== null && s >= MIN_ALTERNATE_SCORE, `score ${s}`);
+    const only = scoreAlternateUpload({ title: 'Song', artist: 'Blur', durationMs: 122000 }, candidate('Song', 'Blur', 122000));
+    assert.ok(only !== null && only >= MIN_ALTERNATE_SCORE, `only ${only}`);
+  });
+});

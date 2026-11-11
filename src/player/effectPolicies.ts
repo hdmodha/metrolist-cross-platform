@@ -30,9 +30,10 @@ export type StreamErrorPlan =
 /**
  * The search query for other uploads of a song: "<artist> <title>", or the title alone when it is an
  * "A - B" title whose A is not the uploader (a re-upload: its uploader's name would spoil the search).
+ * Only the first of a comma-separated credit list is used ("A, B, C" → "A"); "A & B" stays whole.
  */
 export function alternateSearchQuery(track: { title: string; artist: string }): string {
-  const terms = deriveSongSearchTerms(track.title, track.artist);
+  const terms = deriveSongSearchTerms(track.title, track.artist.split(',')[0].trim());
   if (terms.trackName.includes(' - ')) return terms.trackName;
   return `${terms.artistName} ${terms.trackName}`.trim();
 }
