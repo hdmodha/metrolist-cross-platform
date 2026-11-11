@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="metrolist_bp_channel_name">Playback</string>
+    <string name="metrolist_bp_channel_description">Shows the song that is playing, with playback controls</string>
+    <string name="metrolist_bp_previous">Previous</string>
+    <string name="metrolist_bp_play">Play</string>
+    <string name="metrolist_bp_pause">Pause</string>
+    <string name="metrolist_bp_next">Next</string>
+</resources>

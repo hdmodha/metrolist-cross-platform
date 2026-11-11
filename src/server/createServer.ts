@@ -19,13 +19,23 @@ import path from 'node:path';
 import {
   INNERTUBE_API_ORIGIN,
   INNERTUBE_ENDPOINT_URLS,
+  InnerTubeHttpError,
   fetchInnerTubeRadioPage,
   isValidYouTubeVideoId,
   sanitizeApiQueryText,
   sanitizeRadioContinuation,
   searchInnerTubeTracks,
+  withInnerTubeRetry,
   type InnerTubeTransport,
 } from '../utils/metrolistCore';
+import { LruTtlCache } from '../utils/lruCache';
+import {
+  OEMBED_ORIGIN,
+  buildOEmbedUrl,
+  embeddabilityFromOEmbedStatus,
+  parseEmbeddableIds,
+  type Embeddability,
+} from '../utils/embeddability';
 import { isAllowedDesktopHost } from './hostAllowlist';
 import { DEFAULT_RATE_LIMIT_PER_MINUTE } from './serverConfig';
 
@@ -55,7 +65,12 @@ export interface MetrolistServerOptions {
   rateLimitPerMinute?: number;
   /** Replaces the YouTube Music transport (tests). */
   innerTubeTransport?: InnerTubeTransport;
+  /** Replaces the oEmbed request; resolves with the HTTP status (tests). */
+  oEmbedStatus?: OEmbedStatusFetcher;
 }
+
+/** One oEmbed GET; resolves with the HTTP status, rejects on a timeout / network failure. */
+export type OEmbedStatusFetcher = (url: URL, timeoutMs: number) => Promise<number>;
 
 export interface RunningMetrolistServer {
   readonly server: http.Server;
@@ -68,7 +83,13 @@ export interface RunningMetrolistServer {
 
 const MAX_CACHE_ENTRIES = 200;
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
+/** One upstream InnerTube attempt. */
 const UPSTREAM_TIMEOUT_MS = 8000;
+/**
+ * Everything one API request may spend upstream, retries included (`withInnerTubeRetry`). It stays
+ * below the client's own timeout (`apiClient.ts`, 20 s), so the app always gets an answer.
+ */
+const UPSTREAM_BUDGET_MS = 16000;
 
 function setBoundedCache<T>(cache: Map<string, { timestamp: number; payload: T }>, key: string, payload: T) {
   if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
@@ -89,7 +110,7 @@ const INNERTUBE_HEADERS = {
 };
 
 /** Server-side InnerTube transport: fixed allow-listed endpoint URLs only (no request-derived hosts). */
-export const innerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
+export const innerTubeTransport: InnerTubeTransport = async (endpoint, body, options) => {
   const url = new URL(INNERTUBE_ENDPOINT_URLS[endpoint]);
   if (url.origin !== INNERTUBE_API_ORIGIN) {
     throw new Error('Invalid InnerTube upstream origin.');
@@ -97,13 +118,32 @@ export const innerTubeTransport: InnerTubeTransport = async (endpoint, body) => 
   const response = await fetch(url, {
     method: 'POST',
     headers: INNERTUBE_HEADERS,
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    signal: AbortSignal.timeout(options?.timeoutMs ?? UPSTREAM_TIMEOUT_MS),
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`InnerTube ${endpoint} upstream returned ${response.status}`);
+    throw new InnerTubeHttpError(response.status, `InnerTube ${endpoint} upstream returned ${response.status}`);
   }
   return response.json();
+};
+
+const OEMBED_TIMEOUT_MS = 5000;
+const EMBEDDABILITY_CACHE_ENTRIES = 5000;
+const EMBEDDABILITY_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+
+/** Server-side oEmbed request: the fixed youtube.com oEmbed URL only, origin checked again here. */
+export const oEmbedStatus: OEmbedStatusFetcher = async (url, timeoutMs) => {
+  if (url.origin !== OEMBED_ORIGIN || url.pathname !== '/oembed') {
+    throw new Error('Invalid oEmbed upstream URL.');
+  }
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { 'User-Agent': INNERTUBE_HEADERS['User-Agent'], Accept: 'application/json' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  // Only the status matters; do not keep the body around
+  await response.body?.cancel().catch(() => undefined);
+  return response.status;
 };
 
 function resolveHost(mode: ServerMode, host: string | undefined): string {
@@ -119,7 +159,10 @@ function resolveHost(mode: ServerMode, host: string | undefined): string {
 /** Builds the Express app (not listening). */
 export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' | 'host'>): Express {
   const { mode, distPath, frontend } = options;
-  const transport = options.innerTubeTransport ?? innerTubeTransport;
+  const baseTransport = options.innerTubeTransport ?? innerTubeTransport;
+  /** A timeout / network failure is retried once; one budget per API request. */
+  const requestTransport = () =>
+    withInnerTubeRetry(baseTransport, { attemptTimeoutMs: UPSTREAM_TIMEOUT_MS, budgetMs: UPSTREAM_BUDGET_MS });
   const app = express();
 
   app.disable('x-powered-by');
@@ -194,7 +237,7 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
     }
 
     try {
-      const tracks = (await searchInnerTubeTracks(transport, query)).slice(0, 20);
+      const tracks = (await searchInnerTubeTracks(requestTransport(), query)).slice(0, 20);
       const payload = {
         source: 'YouTube Music InnerTube (WEB_REMIX v1)',
         query,
@@ -236,6 +279,7 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
     }
 
     try {
+      const transport = requestTransport();
       let seedVideoId = isValidYouTubeVideoId(rawVideoId) ? rawVideoId : '';
 
       // If the track does not yet have a canonical 11-char YouTube videoId, resolve it via search
@@ -269,6 +313,41 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
       const message = err instanceof Error ? err.message : 'Recommendation engine error';
       res.status(502).json({ error: message });
     }
+  });
+
+  /**
+   * 3. Embeddability pre-check (`/api/innertube/embeddable?ids=a,b,c`, at most 10 ids): YouTube's
+   * oEmbed answers 401 / 403 / 404 for videos that cannot be played in an embedded player.
+   */
+  const fetchOEmbedStatus = options.oEmbedStatus ?? oEmbedStatus;
+  const embeddabilityCache = new LruTtlCache<boolean>({
+    maxEntries: EMBEDDABILITY_CACHE_ENTRIES,
+    ttlMs: EMBEDDABILITY_TTL_MS,
+  });
+  const checkEmbeddability = async (videoId: string): Promise<Embeddability> => {
+    const cached = embeddabilityCache.get(videoId, Date.now());
+    if (cached !== undefined) return cached;
+    try {
+      const result = embeddabilityFromOEmbedStatus(await fetchOEmbedStatus(buildOEmbedUrl(videoId), OEMBED_TIMEOUT_MS));
+      // Only definite answers are cached: an unknown one is asked again next time
+      if (result !== null) embeddabilityCache.set(videoId, result, Date.now());
+      return result;
+    } catch {
+      return null;
+    }
+  };
+  app.get('/api/innertube/embeddable', async (req, res) => {
+    const ids = parseEmbeddableIds(req.query.ids);
+    if (!ids) {
+      res.status(400).json({ error: 'Expected "ids": 1 to 10 comma-separated YouTube video ids.' });
+      return;
+    }
+    const verdicts = await Promise.all(ids.map(checkEmbeddability));
+    const results: Record<string, Embeddability> = {};
+    ids.forEach((id, i) => {
+      results[id] = verdicts[i];
+    });
+    res.json({ results });
   });
 
   // Unknown API routes must answer with JSON, never with the SPA shell

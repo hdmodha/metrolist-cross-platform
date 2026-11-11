@@ -9,7 +9,7 @@ This repository is structured for multi-LLM collaboration (Claude Code, GitHub C
 Every AI agent making changes to this repository **must** run all the checks below and confirm zero errors before finishing a task:
 
 ```bash
-# 1. Run all unit & security tests (every src/**/*.test.ts, all must pass)
+# 1. Run all unit & security tests (every src/, electron/ and native/*/src/ *.test.ts, all must pass)
 npm test
 
 # 2. Run TypeScript compiler typecheck (must exit 0)
@@ -28,9 +28,15 @@ xvfb-run -a npm run test:electron          # macOS / Windows: npm run test:elect
 NODE_ENV=production PORT=3077 timeout 8 npx tsx server.ts
 PORT=3078 timeout 8 npm start              # bundled dist-server/server.mjs
 
+# 6b. After editing src/shared/adBlock.ts or adBlockVectors.ts: regenerate the rule copies (incl. the Android
+#     plugin's asset) and the shared JUnit vectors (a unit test fails while any is stale)
+npm run adblock:rules
+
 # 7. Dependencies: must report 0 vulnerabilities (and the minimatch override must hold)
 npm audit
-npm ls minimatch
+npx -y npm@11.21.1 ls minimatch            # npm 11, as the release jobs use: exit 0, minimatch@11.0.1 "overridden"
+# (not plain `npm ls minimatch` under npm 10: it reports the range-scoped overrides in package.json
+#  as "invalid" and exits 1 although the installed tree is correct; npm 11 understands them)
 
 # 8. After touching electron/, electron-builder.yml or the build: package and smoke-test the app
 npm run desktop:pack
@@ -55,8 +61,10 @@ npx @electron/asar list release/linux-unpacked/resources/app.asar               
 ### Priority 1: Verify the Standalone Mobile App on Real Devices
 - The packaged Android / iOS app calls YouTube Music directly through Capacitor's native HTTP bridge (`src/utils/apiClient.ts`) and relies on the hash router for the hardware Back button. Both were verified against simulated environments only: test a real APK / iOS build.
 
-### Priority 2: Direct Audio Streams (Background Play, Real Downloads)
-- `src/components/YouTubeStreamBridge.tsx` plays through a hidden YouTube IFrame. Mobile WebViews may throttle it in the background, and the audio cannot be stored. A direct `<audio>` stream path (keeping the bridge as a fallback) would allow background playback and real offline Downloads.
+### Priority 2: Verify Android Background Play and Ad Blocking on a Phone
+- Implemented in the local Capacitor plugin `native/capacitor-background-playback` (page-visibility override in YouTube's frames only, media-playback foreground service + media session / notification, ad blocking in the WebView client with the shared rules) and `src/native/backgroundPlayback.ts`; see CLAUDE.md §3 item 10. It is proven by the CI compile, node / JUnit tests and a simulated bridge only: run the README's "What to check on a phone" list on a real APK.
+- Playback stays in the hidden YouTube IFrame (decided): do NOT call `youtubei/v1/player`, impersonate YouTube's app clients to get raw `googlevideo.com` URLs, decipher signatures or generate PO / BotGuard tokens.
+- Never inject the visibility override into the app's own origin (`usePlayer` saves the position on the real `visibilitychange`), and keep `AdBlockingWebViewClient` calling `super` for everything it does not block (Capacitor serves `https://localhost` through it).
 
 ### Priority 3: Playlists
 - The library has Liked Songs, Downloads and Recently played (`likedIds`, `downloadedIds`, `recentlyPlayedIds` in the player core, persisted in `metrolist.player.v2`). User playlists would follow the same pattern: an ordered id list in the reducer, a v3 persistence shape with a migration test, and a page under `#/library/…`.
@@ -68,5 +76,6 @@ npx @electron/asar list release/linux-unpacked/resources/app.asar               
 - **Never remove `express-rate-limit` from `src/server/createServer.ts`**: CodeQL rule `js/missing-rate-limiting` requires `rateLimit(...)` from `express-rate-limit` on routes serving files.
 - **Never relax the desktop server**: desktop mode binds 127.0.0.1 only, sends no CORS headers and checks `Host` (DNS rebinding). Keep the Electron window hardening in `electron/security.ts`.
 - **Never pass raw string URLs with user query params to `fetch()` in the server**: Always use `new URL(...)` + `.searchParams.set(...)` + explicit `url.origin` verification to satisfy CodeQL rule `js/request-forgery`.
-- **Never introduce super-linear regexes in `src/utils/metrolistCore.ts`**: Use linear $O(N)$ string scanning to satisfy CodeQL rule `js/polynomial-redos`.
+- **Ad-block rules stay conservative** (`src/shared/adBlock.ts`, also applied by the Android plugin's Java matcher, held to the same answers by `src/shared/adBlockVectors.ts`): never block what playback needs (the never-block list: `googlevideo.com`, `ytimg.com`, `/iframe_api`, `/s/player/`, `/embed/`, `/youtubei/v1/player`, `/youtubei/v1/next`, `/api/stats/playback`, `/api/stats/watchtime`, …); every rule says why it is safe.
+- **Never introduce super-linear regexes in `src/utils/metrolistCore.ts`** (nor in `src/player/alternateUploads.ts` or `src/shared/adBlock.ts`): Use linear $O(N)$ string scanning to satisfy CodeQL rule `js/polynomial-redos`.
 - **Keep `vite >= 6.4.6` and `esbuild >= 0.25.0` in `package.json`**: Required to keep GitHub Dependabot at 0 alerts.

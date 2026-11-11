@@ -1,0 +1,516 @@
+{
+  "description": "Generated from src/shared/adBlockVectors.ts by `npm run adblock:rules`; do not edit. url (+ resourceType) -> block. The TypeScript and the Android matcher must both give these answers.",
+  "vectors": [
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/id",
+      "block": true
+    },
+    {
+      "url": "https://static.doubleclick.net/instream/ad_status.js",
+      "block": true
+    },
+    {
+      "url": "https://ad.doubleclick.net/ddm/trackclk/N123",
+      "block": true
+    },
+    {
+      "url": "https://www.googleadservices.com/pagead/conversion/123/",
+      "block": true
+    },
+    {
+      "url": "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+      "block": true
+    },
+    {
+      "url": "https://tpc.googlesyndication.com/simgad/123",
+      "block": true
+    },
+    {
+      "url": "https://www.google-analytics.com/collect?v=1",
+      "block": true
+    },
+    {
+      "url": "https://ssl.google-analytics.com/ga.js",
+      "block": true
+    },
+    {
+      "url": "https://www.googletagservices.com/tag/js/gpt.js",
+      "block": true
+    },
+    {
+      "url": "https://adservice.google.com/ddm/fls/z/src=1",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/pagead/paralleladview?ai=abc",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/pagead/viewthroughconversion/123/",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/ptracking?pltype=adhost&ptk=youtube_host",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/api/stats/ads?ver=2&ns=1",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/api/stats/atr?ns=yt&el=embedded&cpn=abc",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/get_midroll_info?ei=abc",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/youtubei/v1/log_event?alt=json",
+      "block": true
+    },
+    {
+      "url": "https://music.youtube.com/youtubei/v1/log_event?alt=json",
+      "block": true
+    },
+    {
+      "url": "https://m.youtube.com/pagead/adview?ai=1",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube-nocookie.com/youtubei/v1/log_event?alt=json",
+      "block": true
+    },
+    {
+      "url": "https://rr3---sn-4g5edndk.googlevideo.com/videoplayback?expire=1&id=o-abc&itag=251&source=youtube&mime=audio%2Fwebm",
+      "block": false
+    },
+    {
+      "url": "https://redirector.googlevideo.com/videoplayback?id=1",
+      "block": false
+    },
+    {
+      "url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+      "block": false
+    },
+    {
+      "url": "https://i9.ytimg.com/vi_webp/dQw4w9WgXcQ/mqdefault.webp",
+      "block": false
+    },
+    {
+      "url": "https://yt3.ggpht.com/abc=s88",
+      "block": false
+    },
+    {
+      "url": "https://lh3.googleusercontent.com/abc=w400-h400",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/iframe_api",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/s/player/1798f86c/www-widgetapi.vflset/www-widgetapi.js",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/s/player/1798f86c/player_ias.vflset/en_US/base.js",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1&enablejsapi=1&origin=http%3A%2F%2F127.0.0.1%3A47823",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+      "block": false
+    },
+    {
+      "url": "https://music.youtube.com/youtubei/v1/search?prettyPrint=false",
+      "block": false
+    },
+    {
+      "url": "https://music.youtube.com/youtubei/v1/next?prettyPrint=false",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/api/stats/playback?ns=yt&el=embedded&cpn=abc&docid=dQw4w9WgXcQ",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/api/stats/watchtime?ns=yt&el=embedded&cpn=abc",
+      "block": false
+    },
+    {
+      "url": "https://s.youtube.com/api/stats/watchtime?ns=yt",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/api/stats/qoe?event=streamingstats",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/generate_204?abc",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ",
+      "block": false
+    },
+    {
+      "url": "https://jnn-pa.googleapis.com/$rpc/google.internal.waa.v1.Waa/Create",
+      "block": false
+    },
+    {
+      "url": "https://www.google.com/js/th/abc.js",
+      "block": false
+    },
+    {
+      "url": "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js",
+      "block": false
+    },
+    {
+      "url": "https://fonts.googleapis.com/css2?family=Inter",
+      "block": false
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/inter/v12/abc.woff2",
+      "block": false
+    },
+    {
+      "url": "http://127.0.0.1:47823/api/innertube/search?q=pagead",
+      "block": false
+    },
+    {
+      "url": "http://127.0.0.1:47823/pagead/not-youtube",
+      "block": false
+    },
+    {
+      "url": "http://localhost:3000/assets/index.js",
+      "block": false
+    },
+    {
+      "url": "https://localhost/",
+      "block": false
+    },
+    {
+      "url": "https://localhost/assets/index.js",
+      "block": false
+    },
+    {
+      "url": "https://localhost/pagead/not-youtube",
+      "block": false
+    },
+    {
+      "url": "https://doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://a.b.doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://doubleclick.net.example.com/x",
+      "block": false
+    },
+    {
+      "url": "https://notdoubleclick.net/x",
+      "block": false
+    },
+    {
+      "url": "https://example.com/doubleclick.net",
+      "block": false
+    },
+    {
+      "url": "https://example.com/?u=https://googleads.g.doubleclick.net/pagead/id",
+      "block": false
+    },
+    {
+      "url": "https://GOOGLEADS.G.DOUBLECLICK.NET./pagead/id",
+      "block": true
+    },
+    {
+      "url": "https://googlevideo.com.doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://doubleclick.net.googlevideo.com/x",
+      "block": false
+    },
+    {
+      "url": "https://example.com/pagead/x",
+      "block": false
+    },
+    {
+      "url": "https://notyoutube.com/pagead/x",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=x&next=/pagead/",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/PAGEAD/x",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead/x?embed/",
+      "block": true
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/id",
+      "resourceType": "mainFrame",
+      "block": false
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/id",
+      "resourceType": "xhr",
+      "block": true
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net/pagead/id",
+      "resourceType": "subFrame",
+      "block": true
+    },
+    {
+      "url": "devtools://devtools/bundled/x",
+      "block": false
+    },
+    {
+      "url": "data:text/plain,doubleclick.net",
+      "block": false
+    },
+    {
+      "url": "blob:https://doubleclick.net/1",
+      "block": false
+    },
+    {
+      "url": "file:///pagead/",
+      "block": false
+    },
+    {
+      "url": "chrome-extension://x/y",
+      "block": false
+    },
+    {
+      "url": "ws://doubleclick.net/x",
+      "block": false
+    },
+    {
+      "url": "mailto:x@doubleclick.net",
+      "block": false
+    },
+    {
+      "url": "javascript:alert(1)",
+      "block": false
+    },
+    {
+      "url": "about:blank",
+      "block": false
+    },
+    {
+      "url": "not a url",
+      "block": false
+    },
+    {
+      "url": "",
+      "block": false
+    },
+    {
+      "url": "http://doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "HTTPS://GoogleAds.G.DoubleClick.Net/pagead/id",
+      "block": true
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net:443/pagead/id",
+      "block": true
+    },
+    {
+      "url": "https://user:pw@googleads.g.doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://googleads.g.doubleclick.net@example.com/x",
+      "block": false
+    },
+    {
+      "url": "https://example.com@googleads.g.doubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/embed/../pagead/adview",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/pagead/../embed/abc",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/%2e%2e/pagead/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/embed/%2E%2E/pagead/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/./pagead/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/a/b/../../pagead/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/youtubei/v1/log_event/../player",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/youtubei/v1/player/../log_event",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com/..",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead/..",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead/.",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com//pagead/x",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com\\pagead\\x",
+      "block": true
+    },
+    {
+      "url": "https:\\\\www.youtube.com\\pagead\\x",
+      "block": true
+    },
+    {
+      "url": "https:www.youtube.com/pagead/x",
+      "block": true
+    },
+    {
+      "url": "https:///www.youtube.com/pagead/x",
+      "block": true
+    },
+    {
+      "url": "  https://www.youtube.com/pagead/x  ",
+      "block": true
+    },
+    {
+      "url": "https://www.you\ttube.com/pag\nead/x",
+      "block": true
+    },
+    {
+      "url": "https://%64oubleclick.net/x",
+      "block": true
+    },
+    {
+      "url": "https://ｄｏｕｂｌｅｃｌｉｃｋ.net/x",
+      "block": true
+    },
+    {
+      "url": "https://ad.doubleclick.net/%2e%2e/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com?x=/pagead/",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com#/pagead/",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead%2Fx",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/ pagead/x",
+      "block": false
+    },
+    {
+      "url": "https://www.youtube.com/pagead/ x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com:8443/pagead/x",
+      "block": true
+    },
+    {
+      "url": "https://www.youtube.com.:443/ptracking",
+      "block": true
+    },
+    {
+      "url": "https://music.youtube.com./youtubei/v1/log_event",
+      "block": true
+    },
+    {
+      "url": "https://doubleclick.net../x",
+      "block": false
+    },
+    {
+      "url": "https://[::1]/pagead/",
+      "block": false
+    },
+    {
+      "url": "https://1.2.3.4/pagead/",
+      "block": false
+    },
+    {
+      "url": "https://doubleclick.net:99999/x",
+      "block": false
+    },
+    {
+      "url": "https://doubleclick.net:abc/x",
+      "block": false
+    },
+    {
+      "url": "https://do^ubleclick.net/x",
+      "block": false
+    },
+    {
+      "url": "https://doubleclick.net\u0000/x",
+      "block": false
+    },
+    {
+      "url": "https://doubleclick.net.123/x",
+      "block": false
+    },
+    {
+      "url": "https://user@/x",
+      "block": false
+    },
+    {
+      "url": "https:///",
+      "block": false
+    },
+    {
+      "url": "https://",
+      "block": false
+    }
+  ]
+}

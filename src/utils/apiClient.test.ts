@@ -1,6 +1,13 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchRadioContinuation, fetchRecommendations, searchTracks } from './apiClient';
+import {
+  checkEmbeddable,
+  fetchRadioContinuation,
+  fetchRecommendations,
+  peekEmbeddability,
+  resetEmbeddabilityCache,
+  searchTracks,
+} from './apiClient';
 
 type FetchStub = (url: string, init?: RequestInit) => Promise<Response>;
 type GlobalWithWindow = { window?: unknown; fetch: typeof fetch };
@@ -37,6 +44,7 @@ const track = (videoId: string) => ({
 afterEach(() => {
   g.fetch = realFetch;
   delete g.window;
+  resetEmbeddabilityCache();
 });
 
 test('searchTracks caches answers by trimmed, lower-cased query', async () => {
@@ -144,4 +152,98 @@ test('Inside the native shell radio pages go straight to YouTube Music through C
   assert.equal(next.continuation, null);
   assert.equal(bodies[1].continuation, 'TOKEN=');
   assert.equal(bodies[1].playlistId, 'RDAMVMseedVideo01');
+});
+
+test('Inside the native shell one timed-out InnerTube request is retried instead of failing the search', async () => {
+  stubFetch(async () => {
+    throw new Error('fetch must not be used inside the native shell');
+  });
+  const timeouts: unknown[] = [];
+  let calls = 0;
+  g.window = {
+    Capacitor: {
+      isNativePlatform: () => true,
+      nativePromise: async (_plugin: string, _method: string, options: Record<string, unknown>) => {
+        calls++;
+        timeouts.push(options.readTimeout);
+        if (calls === 1) throw new Error('The request timed out.');
+        return {
+          status: 200,
+          data: {
+            contents: [
+              {
+                musicResponsiveListItemRenderer: {
+                  playlistItemData: { videoId: 'gdZLi9oWNZg' },
+                  flexColumns: [
+                    { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Dynamite' }] } } },
+                    { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'BTS • Dynamite • 3:19' }] } } },
+                  ],
+                },
+              },
+            ],
+          },
+        };
+      },
+    },
+  };
+  const tracks = await searchTracks('bts dynamite native retry');
+  assert.deepEqual(tracks.map((t) => t.videoId), ['gdZLi9oWNZg']);
+  assert.equal(calls, 2);
+  assert.ok(timeouts.every((t) => typeof t === 'number' && t > 0 && t <= 8000));
+});
+
+test('checkEmbeddable asks the backend once per video and remembers the answers', async () => {
+  const urls = stubFetch(async (url) => {
+    const ids = new URL(url, 'http://app.test').searchParams.get('ids')?.split(',') ?? [];
+    const results: Record<string, boolean | null> = {};
+    for (const id of ids) results[id] = id === 'DrLaoBKGS3g' ? false : id === 'gdZLi9oWNZg' ? null : true;
+    return json({ results });
+  });
+  assert.equal(peekEmbeddability('DrLaoBKGS3g'), undefined);
+  const first = await checkEmbeddable(['DrLaoBKGS3g', 'b1kbLwvqugk', 'gdZLi9oWNZg', 'not-an-id']);
+  assert.deepEqual(first, { DrLaoBKGS3g: false, b1kbLwvqugk: true, gdZLi9oWNZg: null });
+  assert.deepEqual(urls, ['/api/innertube/embeddable?ids=DrLaoBKGS3g%2Cb1kbLwvqugk%2CgdZLi9oWNZg']);
+  assert.equal(peekEmbeddability('DrLaoBKGS3g'), false);
+  assert.equal(peekEmbeddability('b1kbLwvqugk'), true);
+
+  // Known answers come from memory; only the new id is asked
+  const second = await checkEmbeddable(['DrLaoBKGS3g', 'b1kbLwvqugk', 'Z7MIQJluULU']);
+  assert.deepEqual(second, { DrLaoBKGS3g: false, b1kbLwvqugk: true, Z7MIQJluULU: true });
+  assert.deepEqual(urls.slice(1), ['/api/innertube/embeddable?ids=Z7MIQJluULU']);
+});
+
+test('checkEmbeddable never fails the caller: an unreachable backend means "unknown"', async () => {
+  stubFetch(async () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }));
+  assert.deepEqual(await checkEmbeddable(['DrLaoBKGS3g']), { DrLaoBKGS3g: null });
+  // A caller abort is still an abort
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(checkEmbeddable(['b1kbLwvqugk'], controller.signal));
+});
+
+test('Inside the native shell the oEmbed check goes straight to youtube.com through CapacitorHttp', async () => {
+  stubFetch(async () => {
+    throw new Error('fetch must not be used inside the native shell');
+  });
+  const requests: Array<Record<string, unknown>> = [];
+  g.window = {
+    Capacitor: {
+      isNativePlatform: () => true,
+      nativePromise: async (plugin: string, method: string, options: Record<string, unknown>) => {
+        assert.equal(`${plugin}.${method}`, 'CapacitorHttp.request');
+        requests.push(options);
+        const url = new URL(String(options.url));
+        const id = new URL(url.searchParams.get('url') ?? '').searchParams.get('v');
+        if (id === 'gdZLi9oWNZg') throw new Error('timed out');
+        return { status: id === 'DrLaoBKGS3g' ? 401 : 200, data: {} };
+      },
+    },
+  };
+  const results = await checkEmbeddable(['DrLaoBKGS3g', 'b1kbLwvqugk', 'gdZLi9oWNZg']);
+  assert.deepEqual(results, { DrLaoBKGS3g: false, b1kbLwvqugk: true, gdZLi9oWNZg: null });
+  assert.equal(requests.length, 3);
+  for (const r of requests) {
+    assert.equal(r.method, 'GET');
+    assert.match(String(r.url), /^https:\/\/www\.youtube\.com\/oembed\?format=json&url=https%3A%2F%2Fwww\.youtube\.com%2Fwatch%3Fv%3D/);
+  }
 });

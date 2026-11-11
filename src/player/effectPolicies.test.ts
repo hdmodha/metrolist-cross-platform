@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
 import { createInitialPlayerState, playerReducer, type PlayerState } from './playerCore';
 import {
+  EMBED_PRECHECK_UPCOMING,
+  alternateSearchQuery,
   KEYBOARD_SEEK_STEP_MS,
+  planEmbedPrecheck,
+  selectEmbedCheckTargets,
   STALL_BEFORE_WAITING_MS,
   STREAM_ERROR_API_UNAVAILABLE,
   planNetworkRetry,
   shouldWaitForNetworkAfterStall,
   isPositionSaveDue,
-  pickAlternateUpload,
   planStreamErrorRecovery,
   shortcutForKey,
 } from './effectPolicies';
@@ -29,15 +32,54 @@ function playingLive(): PlayerState {
 }
 
 describe('stream error recovery', () => {
+  const online = (code: number, retried = false) => ({ code, online: true, retried });
+
   test('an unavailable player API or an offline device waits for the network', () => {
     const state = playingLive();
-    assert.deepEqual(planStreamErrorRecovery(state, { code: STREAM_ERROR_API_UNAVAILABLE, online: true }), { kind: 'waitForNetwork' });
-    assert.deepEqual(planStreamErrorRecovery(state, { code: 150, online: false }), { kind: 'waitForNetwork' });
+    assert.deepEqual(planStreamErrorRecovery(state, { code: STREAM_ERROR_API_UNAVAILABLE, online: true, retried: false }), { kind: 'waitForNetwork' });
+    assert.deepEqual(planStreamErrorRecovery(state, { code: 150, online: false, retried: false }), { kind: 'waitForNetwork' });
   });
 
-  test('an unplayable upload first looks for another upload of the same song', () => {
-    const plan = planStreamErrorRecovery(playingLive(), { code: 150, online: true });
-    assert.deepEqual(plan, { kind: 'findAlternate', trackId: `ytm-${vid('a')}`, query: 'A Song a', tried: [vid('a')] });
+  test('an upload its owner keeps off other apps (101 / 150) first looks for another upload of the same song', () => {
+    for (const code of [101, 150]) {
+      const plan = planStreamErrorRecovery(playingLive(), online(code));
+      assert.deepEqual(plan, {
+        kind: 'findAlternate',
+        trackId: `ytm-${vid('a')}`,
+        videoId: vid('a'),
+        query: 'A Song a',
+        tried: [vid('a')],
+        reason: 'embedDisabled',
+      });
+    }
+  });
+
+  test('a removed / private video (100) or an invalid id (2) looks for another upload at once', () => {
+    assert.equal(planStreamErrorRecovery(playingLive(), online(100))?.kind, 'findAlternate');
+    assert.equal(planStreamErrorRecovery(playingLive(), online(2))?.kind, 'findAlternate');
+    const plan = planStreamErrorRecovery(playingLive(), online(100));
+    assert.equal(plan && 'reason' in plan ? plan.reason : null, 'unavailable');
+  });
+
+  test('a player error (5) may be transient: the same video is retried once, then another upload', () => {
+    assert.deepEqual(planStreamErrorRecovery(playingLive(), online(5)), {
+      kind: 'retry',
+      trackId: `ytm-${vid('a')}`,
+      videoId: vid('a'),
+      reason: 'playerError',
+    });
+    assert.equal(planStreamErrorRecovery(playingLive(), online(5, true))?.kind, 'findAlternate');
+  });
+
+  test('an embedder / referrer rejection (152 / 153) is retried once, then skipped (other uploads fail alike)', () => {
+    for (const code of [152, 153]) {
+      assert.equal(planStreamErrorRecovery(playingLive(), online(code))?.kind, 'retry');
+      assert.deepEqual(planStreamErrorRecovery(playingLive(), online(code, true)), {
+        kind: 'skip',
+        trackId: `ytm-${vid('a')}`,
+        reason: 'embedderRejected',
+      });
+    }
   });
 
   test('once 3 uploads were tried the song is skipped', () => {
@@ -45,19 +87,89 @@ describe('stream error recovery', () => {
     const id = `ytm-${vid('a')}`;
     state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a2') });
     state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a3') });
-    assert.deepEqual(planStreamErrorRecovery(state, { code: 100, online: true }), { kind: 'skip', trackId: id });
+    assert.deepEqual(planStreamErrorRecovery(state, online(100)), { kind: 'skip', trackId: id, reason: 'unavailable' });
+    assert.deepEqual(planStreamErrorRecovery(state, online(5, true)), { kind: 'skip', trackId: id, reason: 'playerError' });
   });
 
   test('nothing to do without an active track', () => {
-    assert.equal(planStreamErrorRecovery(createInitialPlayerState(), { code: 150, online: true }), null);
+    assert.equal(planStreamErrorRecovery(createInitialPlayerState(), online(150)), null);
+  });
+
+  test('a late error of the previous video (it arrived after a switch) is ignored', () => {
+    let state = playingLive();
+    state = playerReducer(state, { type: 'playFromSearch', track: yt('b') });
+    // The error came from song A's video, but song B is the active one now
+    for (const code of [5, 100, 150, 152]) {
+      assert.equal(planStreamErrorRecovery(state, { ...online(code), videoId: vid('a') }), null, `code ${code}`);
+    }
+    // ... also while waiting for the network: a stale error says nothing about the new video
+    assert.equal(planStreamErrorRecovery(state, { code: 150, online: false, retried: false, videoId: vid('a') }), null);
+    // An error of the active track's current video is handled as usual
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('b') })?.kind, 'findAlternate');
+  });
+
+  test('after a switch to another upload, only errors of that upload count', () => {
+    let state = playingLive();
+    const id = `ytm-${vid('a')}`;
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a2') });
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('a') }), null);
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('a2') })?.kind, 'findAlternate');
+  });
+
+  test('an error without a video id (the player API itself failed) still applies to the active track', () => {
+    const state = playingLive();
+    assert.deepEqual(planStreamErrorRecovery(state, { code: STREAM_ERROR_API_UNAVAILABLE, online: true, retried: false, videoId: undefined }), { kind: 'waitForNetwork' });
+    assert.equal(planStreamErrorRecovery(state, online(150))?.kind, 'findAlternate');
   });
 });
 
-test('the alternate upload is the first candidate that was not tried yet', () => {
-  const candidates = [yt('a'), yt('b'), yt('c')];
-  assert.equal(pickAlternateUpload(candidates, [vid('a')])?.videoId, vid('b'));
-  assert.equal(pickAlternateUpload(candidates, [vid('a'), vid('b'), vid('c')]), null);
-  assert.equal(pickAlternateUpload([], []), null);
+describe('embeddability pre-check', () => {
+  const queueOf = (...names: string[]) => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'playFromSearch', track: yt(names[0]) });
+    for (const name of names.slice(1)) state = playerReducer(state, { type: 'addToQueue', track: yt(name) });
+    return state;
+  };
+  const ref = (name: string) => ({ trackId: `ytm-${vid(name)}`, videoId: vid(name) });
+
+  test('checks the active song and the next 3 upcoming ones, in play order', () => {
+    const state = queueOf('a', 'b', 'c', 'd', 'e', 'f');
+    assert.equal(EMBED_PRECHECK_UPCOMING, 3);
+    assert.deepEqual(selectEmbedCheckTargets(state), [ref('a'), ref('b'), ref('c'), ref('d')]);
+    assert.deepEqual(selectEmbedCheckTargets(createInitialPlayerState()), []);
+  });
+
+  test('songs already known to be unplayable are not checked again; the current upload is what counts', () => {
+    let state = queueOf('a', 'b', 'c', 'd', 'e');
+    state = playerReducer(state, { type: 'trackUnplayable', trackId: `ytm-${vid('b')}`, random: 0, reason: 'embedDisabled', videoId: vid('b') });
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: `ytm-${vid('c')}`, videoId: vid('c2'), expectedVideoId: vid('c') });
+    assert.deepEqual(selectEmbedCheckTargets(state), [ref('a'), { trackId: `ytm-${vid('c')}`, videoId: vid('c2') }, ref('d'), ref('e')]);
+  });
+
+  test('with shuffle on, hand-queued songs (which play first) are checked first', () => {
+    let state = playerReducer(createInitialPlayerState(), {
+      type: 'playFromList',
+      track: yt('a'),
+      context: [yt('a'), yt('b'), yt('c'), yt('d'), yt('e')],
+    });
+    state = playerReducer(state, { type: 'toggleShuffle' });
+    state = playerReducer(state, { type: 'addToQueue', track: yt('q') });
+    assert.deepEqual(selectEmbedCheckTargets(state)[1], ref('q'));
+  });
+
+  test('asks only about uploads never checked and not in flight; reports the ones known to be blocked', () => {
+    const targets = [ref('a'), ref('b'), ref('c'), ref('d')];
+    const known: Record<string, boolean | null> = { [vid('a')]: true, [vid('b')]: false, [vid('c')]: null };
+    const plan = planEmbedPrecheck(targets, (id) => (id in known ? known[id] : undefined), new Set());
+    assert.deepEqual(plan, { check: [vid('d')], blocked: [ref('b')] });
+    assert.deepEqual(planEmbedPrecheck(targets, (id) => (id in known ? known[id] : undefined), new Set([vid('d')])).check, []);
+  });
+});
+
+test('the search for other uploads names the artist, or uses an "A - B" title as it is', () => {
+  assert.equal(alternateSearchQuery({ title: 'Nightcall', artist: 'Kavinsky' }), 'Kavinsky Nightcall');
+  assert.equal(alternateSearchQuery({ title: 'Kavinsky - Nightcall (Official Audio)', artist: 'Kavinsky VEVO' }), 'Kavinsky Nightcall');
+  // A re-upload by someone else: the uploader's name would only spoil the search
+  assert.equal(alternateSearchQuery({ title: 'The Weeknd - Blinding Lights', artist: 'David Dean Burkhart' }), 'The Weeknd - Blinding Lights');
 });
 
 test('the position is saved at most every 5 seconds', () => {

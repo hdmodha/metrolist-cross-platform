@@ -26,8 +26,12 @@ interface YouTubeStreamBridgeProps {
   onStatusChange: (status: StreamStatus) => void;
   onTimeUpdateMs: (currentMs: number, durationMs?: number) => void;
   onEnded: () => void;
-  /** YouTube player error code (2, 5, 100, 101, 150) or `STREAM_ERROR_API_UNAVAILABLE`. */
-  onError: (code: number) => void;
+  /**
+   * YouTube player error code (2, 5, 100, 101, 150) or `STREAM_ERROR_API_UNAVAILABLE`, tagged with
+   * the video it came from (none when the player API itself failed). An error can arrive late, after
+   * the switch to another video: the player ignores errors of a video that is no longer active.
+   */
+  onError: (code: number, videoId?: string) => void;
   /** The stream was paused / resumed outside the app UI (OS media keys, headset button, tap on player). */
   onExternalPlayPause?: (playing: boolean) => void;
 }
@@ -45,7 +49,7 @@ declare global {
           events?: {
             onReady?: (ev: { target: YTPlayerInstance }) => void;
             onStateChange?: (ev: { data: number; target: YTPlayerInstance }) => void;
-            onError?: (ev: { data: number }) => void;
+            onError?: (ev: { data: number; target?: YTPlayerInstance }) => void;
           };
         }
       ) => YTPlayerInstance;
@@ -66,7 +70,33 @@ interface YTPlayerInstance {
   getCurrentTime: () => number;
   getDuration: () => number;
   getPlayerState: () => number;
+  /** The video the player last reported (undocumented, but present in the IFrame API). */
+  getVideoData?: () => { video_id?: string } | null | undefined;
+  getVideoUrl?: () => string;
   destroy: () => void;
+}
+
+const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+/**
+ * The video the player itself last reported. Its getters answer from what the player iframe last
+ * delivered, so while an error of the previous video is still on its way they still name that
+ * video, even though a new one was already requested. `undefined` when the player cannot tell.
+ */
+function reportedVideoId(player: YTPlayerInstance | null | undefined): string | undefined {
+  if (!player) return undefined;
+  try {
+    const fromData = player.getVideoData?.()?.video_id;
+    if (typeof fromData === 'string' && VIDEO_ID_PATTERN.test(fromData)) return fromData;
+    const url = player.getVideoUrl?.();
+    if (typeof url === 'string' && url) {
+      const fromUrl = new URL(url).searchParams.get('v');
+      if (fromUrl && VIDEO_ID_PATTERN.test(fromUrl)) return fromUrl;
+    }
+  } catch {
+    // a player that is being torn down
+  }
+  return undefined;
 }
 
 const YT_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 } as const;
@@ -241,8 +271,9 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
           const mountNode = document.createElement('div');
           host.replaceChildren(mountNode);
 
+          const autoplay = latest.current.isPlaying;
           const playerVars: Record<string, string | number> = {
-            autoplay: latest.current.isPlaying ? 1 : 0,
+            autoplay: autoplay ? 1 : 0,
             controls: 0,
             disablekb: 1,
             fs: 0,
@@ -276,6 +307,10 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                     else ev.target.cueVideoById(wanted, 0);
                   } else if (latest.current.isPlaying) {
                     ev.target.playVideo();
+                  } else if (autoplay) {
+                    // Paused while the player was still getting ready: cueing cancels the autoplay it
+                    // was created with (it would start the song anyway, and look like an external play)
+                    ev.target.cueVideoById(wanted, startSeconds);
                   }
                   const pendingSeek = pendingSeekRef.current;
                   if (pendingSeek) {
@@ -330,7 +365,9 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                 onError: (ev) => {
                   if (disposed) return;
                   clearWatchdog();
-                  latest.current.onError(typeof ev.data === 'number' ? ev.data : 5);
+                  const code = typeof ev.data === 'number' ? ev.data : 5;
+                  const source = reportedVideoId(ev.target ?? playerRef.current) ?? loadedVideoIdRef.current;
+                  latest.current.onError(code, source);
                 },
               },
             });
@@ -381,7 +418,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
         player.cueVideoById(videoId, 0);
       }
     } catch {
-      latest.current.onError(5);
+      latest.current.onError(5, videoId);
     }
   }, [videoId, armStartWatchdog]);
 

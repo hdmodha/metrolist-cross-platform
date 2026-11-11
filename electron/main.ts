@@ -7,6 +7,9 @@
  * `http://127.0.0.1:<port>/` over plain http (not a custom `app://` scheme), because YouTube's embedded
  * player needs a normal http(s) origin / referrer.
  *
+ * Ad and tracking requests (the YouTube player's included) are cancelled in the session
+ * (`adBlocker.ts`, rules in `src/shared/adBlock.ts`).
+ *
  * Flags: `--metrolist-dev` (unpackaged only) serves the source through Vite; `METROLIST_SMOKE_TEST=1`
  * runs the start-up self-check and exits (see `smokeRunner.ts`).
  */
@@ -15,6 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startMetrolistServer, type FrontendMiddleware, type RunningMetrolistServer } from '../src/server/createServer';
+import { installAdBlocker, type AdBlocker } from './adBlocker';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 import { createMainWindow } from './mainWindow';
 import { installMenu } from './menu';
@@ -43,6 +47,7 @@ let mainWindow: BrowserWindow | null = null;
 let server: RunningMetrolistServer | null = null;
 let appOrigin = '';
 let quitting = false;
+let adBlocker: AdBlocker | null = null;
 
 function showMainWindow(): void {
   if (!server) return;
@@ -116,6 +121,8 @@ function noticeFallbackPort(win: BrowserWindow, port: number): void {
 async function start(): Promise<void> {
   if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID);
   applyPermissionPolicy(session.defaultSession);
+  // Before any page loads: ad / tracking requests of the YouTube player are cancelled from the start
+  adBlocker = installAdBlocker(session.defaultSession);
   installMenu();
 
   const started = await startServer();
@@ -145,6 +152,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!isMac) app.quit();
   });
   app.on('will-quit', () => {
+    if (adBlocker) console.log(`[metrolist] ad blocker: ${adBlocker.blockedCount()} request(s) blocked this session`);
     void server?.close();
   });
 

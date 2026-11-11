@@ -6,7 +6,12 @@
  * the app loads with `FakeYouTubeOptions`):
  * - `current().__debug()` → `{ state, time, videoId, destroyed }` of the newest player
  * - `instances` → every player ever created (a re-created stream shows up as a new instance)
+ * - `loaded` → every video id a player was created with, loaded or cued
  * - `__userTap()` (a tap on the revealed player), `__externalPause()` (OS media key), `__stall()` (buffering forever)
+ * - `lateErrorOnSwitch = true`: the next switch to another video first delivers an error 150 for the
+ *   video it switches away from (like a real player whose error was still on its way), then plays
+ * - `getVideoData()` names the video the player last reported, like the real API (it lags behind a
+ *   `loadVideoById` until the player has taken the new video on)
  */
 
 export interface FakeYouTubeOptions {
@@ -18,6 +23,15 @@ export interface FakeYouTubeOptions {
   durations?: Record<string, number>;
   /** Playback speed multiplier. */
   speed?: number;
+  /** How long a new player takes to become ready (default 60 ms; slow networks take seconds). */
+  readyDelayMs?: number;
+  /**
+   * URLs every new player requests from inside its iframe, like the real player's ad / stats
+   * requests (the desktop suite checks which ones the ad blocker cancels). Outcomes land in `probes`.
+   */
+  probeUrls?: string[];
+  /** The next switch to another video first raises error 150 for the previous one (see above). */
+  lateErrorOnSwitch?: boolean;
 }
 
 export interface FakePlayerDebug {
@@ -38,7 +52,11 @@ export interface FakePlayer {
 }
 
 export interface FakeYouTubeControl extends Required<FakeYouTubeOptions> {
+  /** `ok` / `failed` per probe URL (the newest player's request). */
+  probes: Record<string, 'ok' | 'failed'>;
   instances: FakePlayer[];
+  /** Every video id a player was created with, loaded or cued, in order. */
+  loaded: string[];
   current: () => FakePlayer | undefined;
 }
 
@@ -48,7 +66,7 @@ interface PlayerOptions {
   events: {
     onReady?: (ev: { target: unknown }) => void;
     onStateChange?: (ev: { data: number; target: unknown }) => void;
-    onError?: (ev: { data: number }) => void;
+    onError?: (ev: { data: number; target?: unknown }) => void;
   };
 }
 
@@ -61,16 +79,24 @@ export function installFakeYouTubeApi(): void {
   };
   const ctl = (w.__yt = w.__yt || {}) as FakeYouTubeControl;
   ctl.instances = [];
+  ctl.loaded = [];
   ctl.speed = ctl.speed || 1;
   ctl.blocked = !!ctl.blocked;
   ctl.errorIds = ctl.errorIds || [];
   ctl.durations = ctl.durations || {};
+  ctl.probeUrls = ctl.probeUrls || [];
+  ctl.readyDelayMs = ctl.readyDelayMs || 60;
+  ctl.lateErrorOnSwitch = !!ctl.lateErrorOnSwitch;
+  ctl.probes = {};
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
     const self = this;
     let state = -1;
     let time = (opts.playerVars && Number(opts.playerVars.start)) || 0;
     let videoId = opts.videoId;
+    /** What the player has "delivered" about its video so far (`getVideoData`). */
+    let reportedVideoId = videoId;
+    ctl.loaded.push(videoId);
     let destroyed = false;
     let stalled = false;
     const iframe = document.createElement('iframe');
@@ -87,7 +113,7 @@ export function installFakeYouTubeApi(): void {
     const start = () => {
       if (ctl.blocked || destroyed) return;
       if (ctl.errorIds.indexOf(videoId) !== -1 || ctl.errorIds.indexOf('*') !== -1) {
-        if (opts.events.onError) opts.events.onError({ data: 150 });
+        if (opts.events.onError) opts.events.onError({ data: 150, target: self });
         return;
       }
       setState(3);
@@ -100,15 +126,34 @@ export function installFakeYouTubeApi(): void {
         ? [String((id as { videoId: string }).videoId), Number((id as { startSeconds?: number }).startSeconds) || 0]
         : [String(id), Number(startSeconds) || 0];
     self.loadVideoById = (id: unknown, startSeconds?: number) => {
+      const previous = videoId;
       [videoId, time] = readArgs(id, startSeconds);
+      ctl.loaded.push(videoId);
       stalled = false;
-      setState(-1);
-      setTimeout(start, 30);
+      const takeOn = () => {
+        reportedVideoId = videoId;
+        setState(-1);
+        setTimeout(start, 30);
+      };
+      if (ctl.lateErrorOnSwitch && previous !== videoId) {
+        ctl.lateErrorOnSwitch = false;
+        // The previous video's error arrives first: the player still reports that video
+        setTimeout(() => {
+          if (destroyed) return;
+          if (opts.events.onError) opts.events.onError({ data: 150, target: self });
+          takeOn();
+        }, 0);
+        return;
+      }
+      takeOn();
     };
     self.cueVideoById = (id: unknown, startSeconds?: number) => {
       [videoId, time] = readArgs(id, startSeconds);
+      reportedVideoId = videoId;
+      ctl.loaded.push(videoId);
       setState(5);
     };
+    self.getVideoData = () => ({ video_id: reportedVideoId });
     self.playVideo = () => {
       if (state === 1 || state === 3) return;
       if (state === 0) time = 0;
@@ -156,11 +201,24 @@ export function installFakeYouTubeApi(): void {
       }
     }, 100);
     ctl.instances.push(self);
+    const frameWindow = iframe.contentWindow as (Window & typeof globalThis) | null;
+    for (const url of ctl.probeUrls) {
+      // From the player's own frame, like the real player's requests (opaque `no-cors` answers count as ok)
+      (frameWindow || window).fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(
+        () => {
+          ctl.probes[url] = 'ok';
+        },
+        () => {
+          ctl.probes[url] = 'failed';
+        }
+      );
+    }
     setTimeout(() => {
       if (destroyed) return;
       if (opts.events.onReady) opts.events.onReady({ target: self });
-      if (opts.playerVars && opts.playerVars.autoplay) start();
-    }, 60);
+      // Autoplay, unless onReady already told the player what to do (cue, play, load)
+      if (opts.playerVars && opts.playerVars.autoplay && state === -1) start();
+    }, ctl.readyDelayMs);
   }
 
   ctl.current = () => {

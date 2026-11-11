@@ -3,48 +3,123 @@
  * how to recover from a stream error, when to wait for the network, when to save the position and
  * which keys are shortcuts.
  */
-import { deriveSongSearchTerms, type InnerTubeParsedTrack } from '../utils/metrolistCore';
+import { deriveSongSearchTerms } from '../utils/metrolistCore';
+import type { Embeddability } from '../utils/embeddability';
 import {
   selectActiveTrack,
   selectCanTryAlternateVideo,
   selectTriedVideoIds,
+  selectUnplayableReason,
+  selectUpcomingIds,
   type PlayerState,
   type StreamStatus,
 } from './playerCore';
 import { canRetryNetwork } from './retryPolicy';
+import { classifyStreamError, type UnplayableReason } from './streamErrors';
 
 /** Error code reported when the YouTube IFrame API script itself cannot be loaded (offline, blocked). */
 export const STREAM_ERROR_API_UNAVAILABLE = -1;
 
 export type StreamErrorPlan =
   | { kind: 'waitForNetwork' }
-  | { kind: 'findAlternate'; trackId: string; query: string; tried: string[] }
-  | { kind: 'skip'; trackId: string };
+  /** Re-create the player for the same video once (`retried` tells whether that already happened). */
+  | { kind: 'retry'; trackId: string; videoId: string; reason: UnplayableReason }
+  | { kind: 'findAlternate'; trackId: string; videoId: string; query: string; tried: string[]; reason: UnplayableReason }
+  | { kind: 'skip'; trackId: string; reason: UnplayableReason };
 
-/** What to do when the stream of the active track reports an error. */
+/**
+ * The search query for other uploads of a song: "<artist> <title>", or the title alone when it is an
+ * "A - B" title whose A is not the uploader (a re-upload: its uploader's name would spoil the search).
+ */
+export function alternateSearchQuery(track: { title: string; artist: string }): string {
+  const terms = deriveSongSearchTerms(track.title, track.artist);
+  if (terms.trackName.includes(' - ')) return terms.trackName;
+  return `${terms.artistName} ${terms.trackName}`.trim();
+}
+
+/**
+ * What to do when the stream of the active track reports an error (codes: `streamErrors.ts`).
+ * `retried` = the player was already re-created once for this track's current video.
+ * `videoId` = the video the error came from (the bridge tags it): an error of another video is a
+ * late one, for the song (or upload) that was playing before a switch, and is ignored. Without a
+ * video id (the player API itself failed) the error applies to whatever is active.
+ */
 export function planStreamErrorRecovery(
   state: PlayerState,
-  error: { code: number; online: boolean }
+  error: { code: number; online: boolean; retried: boolean; videoId?: string }
 ): StreamErrorPlan | null {
   const track = selectActiveTrack(state);
   if (!track) return null;
+  if (error.videoId !== undefined && error.videoId !== track.videoId) return null;
   if (error.code === STREAM_ERROR_API_UNAVAILABLE || !error.online) return { kind: 'waitForNetwork' };
-  if (!selectCanTryAlternateVideo(state, track.id)) return { kind: 'skip', trackId: track.id };
-  const terms = deriveSongSearchTerms(track.title, track.artist);
+  const { reason, recovery } = classifyStreamError(error.code);
+  if (recovery !== 'alternate' && !error.retried) {
+    return { kind: 'retry', trackId: track.id, videoId: track.videoId, reason };
+  }
+  if (recovery === 'retryThenSkip' || !selectCanTryAlternateVideo(state, track.id)) {
+    return { kind: 'skip', trackId: track.id, reason };
+  }
   return {
     kind: 'findAlternate',
     trackId: track.id,
-    query: `${terms.artistName} ${terms.trackName}`.trim(),
+    videoId: track.videoId,
+    query: alternateSearchQuery(track),
     tried: selectTriedVideoIds(state, track.id),
+    reason,
   };
 }
 
-/** Another upload of the same song: the first search result that has not been tried yet. */
-export function pickAlternateUpload(
-  candidates: InnerTubeParsedTrack[],
-  tried: string[]
-): InnerTubeParsedTrack | null {
-  return candidates.find((c) => !tried.includes(c.videoId)) ?? null;
+/** Upcoming songs whose upload is checked ahead of time, besides the active one. */
+export const EMBED_PRECHECK_UPCOMING = 3;
+
+/** One song's current upload. */
+export interface UploadRef {
+  trackId: string;
+  videoId: string;
+}
+
+/**
+ * The uploads to check before they are reached: the active song, then the next 3 upcoming songs in
+ * play order (with shuffle on, hand-queued songs first: they play first). Songs already known to be
+ * unplayable are left out.
+ */
+export function selectEmbedCheckTargets(state: PlayerState, upcomingCount = EMBED_PRECHECK_UPCOMING): UploadRef[] {
+  const active = selectActiveTrack(state);
+  if (!active) return [];
+  let upcoming = selectUpcomingIds(state);
+  if (state.shuffleEnabled) {
+    const queued = new Set(state.userQueuedIds);
+    upcoming = [...upcoming.filter((id) => queued.has(id)), ...upcoming.filter((id) => !queued.has(id))];
+  }
+  const targets: UploadRef[] = [{ trackId: active.id, videoId: active.videoId }];
+  for (const id of upcoming) {
+    if (targets.length > upcomingCount) break;
+    const track = state.tracksById[id];
+    if (!track || selectUnplayableReason(state, id) !== null) continue;
+    targets.push({ trackId: id, videoId: track.videoId });
+  }
+  return targets;
+}
+
+/**
+ * `check`: uploads never checked and not being checked; `blocked`: targets known not to be
+ * embeddable (their song needs another upload). `null` (inconclusive) counts as playable.
+ */
+export function planEmbedPrecheck(
+  targets: readonly UploadRef[],
+  known: (videoId: string) => Embeddability | undefined,
+  pending: ReadonlySet<string>
+): { check: string[]; blocked: UploadRef[] } {
+  const check: string[] = [];
+  const blocked: UploadRef[] = [];
+  for (const target of targets) {
+    const verdict = known(target.videoId);
+    if (verdict === false) blocked.push(target);
+    else if (verdict === undefined && !pending.has(target.videoId) && !check.includes(target.videoId)) {
+      check.push(target.videoId);
+    }
+  }
+  return { check, blocked };
 }
 
 /** How long a stream may sit in loading / buffering while offline before we wait for the network. */

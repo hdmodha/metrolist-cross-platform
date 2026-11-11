@@ -23,6 +23,7 @@ import {
   selectTriedVideoIds,
   selectUpcomingCount,
   selectUpcomingIds,
+  selectUnplayableReason,
   toMetrolistTrack,
   type PlayerAction,
   type PlayerState,
@@ -125,6 +126,7 @@ function assertInvariants(state: PlayerState) {
     );
   }
   for (const tried of Object.values(state.triedVideoIdsByTrack)) assert.ok(tried.length <= 3);
+  for (const id of Object.keys(state.unplayableTracks)) assert.ok(referenced.has(id), `the mark of ${id} was collected`);
 }
 
 /* ------------------------------------------- tests ------------------------------------------- */
@@ -456,6 +458,13 @@ describe('unplayable songs and alternate uploads', () => {
     assert.match(state.notice?.message ?? '', /can’t be played/);
   });
 
+  test('the notice says why the song is skipped', () => {
+    const blocked = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'embedDisabled' });
+    assert.equal(blocked.notice?.message, '“Song a” can’t be played outside YouTube: its owner turned that off. Skipping…');
+    const removed = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'unavailable' });
+    assert.match(removed.notice?.message ?? '', /removed from YouTube or is private/);
+  });
+
   test('stops after 3 consecutive failures, and a playing stream resets the counter', () => {
     let state = run(
       live(),
@@ -510,6 +519,135 @@ describe('unplayable songs and alternate uploads', () => {
     // Only for the playing song
     assert.equal(run(state, { type: 'alternateVideoFound', trackId: ytId('b'), videoId: vid('b2') }).tracksById[ytId('b')].videoId, vid('b'));
     assert.equal(selectCanTryAlternateVideo(state, 'nope'), false);
+  });
+});
+
+describe('two songs on the same upload', () => {
+  test('the next song restarts the loaded video when it plays the same upload as the one that ended', () => {
+    // "a" fell back to the upload of "b" (an alternate upload), then "b" itself comes next
+    let state = run(
+      fresh(),
+      { type: 'playFromSearch', track: yt('a') },
+      { type: 'addToQueue', track: yt('b') },
+      { type: 'alternateVideoFound', trackId: ytId('a'), videoId: vid('b') },
+      { type: 'seekHandled' }
+    );
+    assert.equal(state.tracksById[ytId('a')].videoId, state.tracksById[ytId('b')].videoId);
+    state = run(state, { type: 'trackEnded', trackId: ytId('a'), random: 0 });
+    assert.equal(active(state), 'b');
+    // The player keeps the same video loaded (nothing to switch to): only a seek restarts it
+    assert.equal(state.seekRequest?.ms, 0);
+    assert.equal(state.isPlaying, true);
+  });
+
+  test('songs on different uploads need no seek (a new video loads from the start)', () => {
+    const state = run(fresh(), { type: 'playFromSearch', track: yt('a') }, { type: 'addToQueue', track: yt('b') }, { type: 'next', random: 0 });
+    assert.equal(active(state), 'b');
+    assert.equal(state.seekRequest, null);
+  });
+});
+
+describe('uploads checked before they are reached (embeddability pre-check)', () => {
+  const live = () =>
+    run(
+      fresh(),
+      { type: 'playFromSearch', track: yt('a') },
+      { type: 'addToQueue', track: yt('b') },
+      { type: 'addToQueue', track: yt('c') },
+      { type: 'addToQueue', track: yt('d') }
+    );
+
+  test('an upcoming song gets another upload in place: same id, queue, likes and history', () => {
+    let state = run(live(), { type: 'toggleLike', trackId: ytId('c'), track: yt('c') });
+    const before = state;
+    state = run(state, { type: 'alternateVideoFound', trackId: ytId('c'), videoId: vid('c2'), durationMs: 181000, expectedVideoId: vid('c') });
+    assert.equal(state.tracksById[ytId('c')].videoId, vid('c2'));
+    assert.equal(state.tracksById[ytId('c')].durationMs, 181000);
+    assert.deepEqual(state.queueIds, before.queueIds);
+    assert.deepEqual(state.likedIds, before.likedIds);
+    assert.equal(state.streamStatus, before.streamStatus, 'the playing song is not touched');
+    assert.deepEqual(selectTriedVideoIds(state, ytId('c')), [vid('c'), vid('c2')]);
+    // A check of an upload the song no longer uses is stale and ignored
+    assert.equal(run(state, { type: 'alternateVideoFound', trackId: ytId('c'), videoId: vid('c3'), expectedVideoId: vid('c') }), state);
+  });
+
+  test('an upcoming song without another upload is marked and later skipped without being loaded, with one notice', () => {
+    let state = run(live(), { type: 'trackUnplayable', trackId: ytId('b'), random: 0, reason: 'embedDisabled', videoId: vid('b') });
+    assert.equal(active(state), 'a', 'marking an upcoming song changes nothing that plays');
+    assert.equal(q(state), 'a,b,c,d');
+    assert.deepEqual(state.notice, live().notice, 'no notice until the song is reached');
+    assert.equal(selectUnplayableReason(state, ytId('b')), 'embedDisabled');
+    // A stale verdict (the song already got another upload) is ignored
+    assert.equal(run(state, { type: 'trackUnplayable', trackId: ytId('c'), random: 0, reason: 'embedDisabled', videoId: vid('zz') }), state);
+
+    state = run(state, { type: 'trackEnded', trackId: ytId('a'), random: 0 });
+    assert.equal(active(state), 'c', 'b is jumped over');
+    assert.equal(state.streamStatus, 'loading');
+    assert.equal(state.notice?.message, '“Song b” can’t be played outside YouTube: its owner turned that off. Skipped.');
+    assert.ok(!state.playHistory.includes(ytId('b')));
+    // Next / Previous jump over it too
+    assert.equal(active(run(state, { type: 'previous', positionMs: 0 })), 'a');
+    assert.equal(active(run(live(), { type: 'trackUnplayable', trackId: ytId('b'), random: 0, reason: 'embedDisabled', videoId: vid('b') }, { type: 'next', random: 0 })), 'c');
+  });
+
+  test('marked songs at the end of the queue end playback like the end of the queue', () => {
+    const state = run(
+      live(),
+      { type: 'playQueueItem', trackId: ytId('c') },
+      { type: 'trackUnplayable', trackId: ytId('d'), random: 0, reason: 'unavailable', videoId: vid('d') },
+      { type: 'trackEnded', trackId: ytId('c'), random: 0 }
+    );
+    assert.equal(state.isPlaying, false);
+    assert.equal(active(state), 'c');
+  });
+
+  test('every other song marked: playback stops instead of looping', () => {
+    let state = live();
+    for (const name of ['b', 'c', 'd']) {
+      state = run(state, { type: 'trackUnplayable', trackId: ytId(name), random: 0, reason: 'embedDisabled', videoId: vid(name) });
+    }
+    state = run(state, { type: 'cycleRepeat' }, { type: 'trackEnded', trackId: ytId('a'), random: 0.3 });
+    assert.equal(active(state), 'a', 'repeat-all replays the only playable song');
+    state = run(state, { type: 'toggleShuffle' }, { type: 'next', random: 0.7 });
+    assert.equal(active(state), 'a');
+  });
+
+  test('a marked song is not started by a tap: the notice says why', () => {
+    const marked = run(live(), { type: 'trackUnplayable', trackId: ytId('c'), random: 0, reason: 'embedDisabled', videoId: vid('c') });
+    for (const action of [
+      { type: 'playQueueItem', trackId: ytId('c') },
+      { type: 'playFromSearch', track: yt('c') },
+      { type: 'playFromList', track: yt('c'), context: [yt('c'), yt('d')] },
+    ] as PlayerAction[]) {
+      const state = run(marked, action);
+      assert.equal(active(state), 'a');
+      assert.equal(state.notice?.message, '“Song c” can’t be played outside YouTube: its owner turned that off.');
+    }
+    // Shuffle never starts on it
+    for (const random of [0, 0.3, 0.6, 0.99]) {
+      assert.notEqual(active(run(marked, { type: 'shuffleList', context: [yt('c'), yt('d')], random })), 'c');
+    }
+  });
+
+  test('another upload clears the mark; an active song that ran out of uploads keeps one', () => {
+    let state = run(live(), { type: 'trackUnplayable', trackId: ytId('c'), random: 0, reason: 'embedDisabled', videoId: vid('c') });
+    state = run(state, { type: 'alternateVideoFound', trackId: ytId('c'), videoId: vid('c2'), expectedVideoId: vid('c') });
+    assert.equal(selectUnplayableReason(state, ytId('c')), null);
+    const failed = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'unavailable' });
+    assert.equal(active(failed), 'b');
+    assert.equal(selectUnplayableReason(failed, ytId('a')), 'unavailable');
+    // Transient reasons (a player error, an app-level rejection) are not remembered
+    const transient = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'playerError' });
+    assert.equal(selectUnplayableReason(transient, ytId('a')), null);
+  });
+
+  test('marks of songs nothing refers to any more are dropped', () => {
+    const state = run(
+      live(),
+      { type: 'trackUnplayable', trackId: ytId('c'), random: 0, reason: 'embedDisabled', videoId: vid('c') },
+      { type: 'removeFromQueue', trackId: ytId('c') }
+    );
+    assert.deepEqual(Object.keys(state.unplayableTracks), []);
   });
 });
 
@@ -1034,6 +1172,15 @@ function randomAction(state: PlayerState, rnd: () => number): PlayerAction {
     () => ({ type: 'previous', positionMs: pick([0, 2000, 5000]) }),
     () => ({ type: 'trackEnded', random: rnd(), trackId: rnd() < 0.9 ? activeId : anyId() }),
     () => ({ type: 'trackUnplayable', trackId: rnd() < 0.9 ? activeId : anyId(), random: rnd() }),
+    () => {
+      const trackId = anyId();
+      const videoId = state.tracksById[trackId]?.videoId ?? vid('zz');
+      return { type: 'trackUnplayable', trackId, random: rnd(), reason: pick(['embedDisabled', 'unavailable', 'playerError'] as const), videoId };
+    },
+    () => {
+      const trackId = anyId();
+      return { type: 'alternateVideoFound', trackId, videoId: vid(pick(fixtureNames) + pick(fixtureNames)), expectedVideoId: state.tracksById[trackId]?.videoId };
+    },
     () => ({ type: 'alternateVideoFound', trackId: anyId(), videoId: vid(pick(fixtureNames) + pick(fixtureNames)), durationMs: pick([10000, 250000]) }),
     () => ({ type: 'streamStatusChanged', status }),
     () => ({ type: 'seekRequested', ms: Math.floor(rnd() * 400000) - 1000 }),

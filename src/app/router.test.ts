@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatRoute, isSameRoute, parseRoute, type Route } from './router';
+import { formatRoute, isSameRoute, navigationEffect, parseRoute, type Route } from './router';
 
 describe('parseRoute', () => {
   test('the five pages', () => {
@@ -63,5 +63,24 @@ describe('formatRoute', () => {
     assert.equal(isSameRoute({ name: 'search', query: 'a' }, { name: 'search', query: 'a' }), true);
     assert.equal(isSameRoute({ name: 'search', query: 'a' }, { name: 'search', query: 'b' }), false);
     assert.equal(isSameRoute({ name: 'liked' }, { name: 'downloads' }), false);
+  });
+});
+
+describe('navigationEffect', () => {
+  test('a link to the page that is already shown adds no history entry', () => {
+    assert.equal(navigationEffect({ name: 'library' }, '#/library'), 'none');
+    assert.equal(navigationEffect({ name: 'search', query: 'daft punk' }, '#/search?q=daft%20punk'), 'none');
+  });
+
+  test('the same page under another URL (no hash yet on a fresh start, an unknown route) is replaced, not pushed', () => {
+    assert.equal(navigationEffect({ name: 'home' }, ''), 'replace');
+    assert.equal(navigationEffect({ name: 'home' }, '#'), 'replace');
+    assert.equal(navigationEffect({ name: 'home' }, '#/no/such/page'), 'replace');
+    assert.equal(navigationEffect({ name: 'library' }, '#/library/'), 'replace');
+  });
+
+  test('another page is pushed', () => {
+    assert.equal(navigationEffect({ name: 'library' }, ''), 'push');
+    assert.equal(navigationEffect({ name: 'search', query: 'x' }, '#/search'), 'push');
   });
 });

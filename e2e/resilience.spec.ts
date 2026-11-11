@@ -1,4 +1,5 @@
-import { expect, test } from './fixtures/test';
+import { fixtureVideoId } from './fixtures/apiFixtures';
+import { defaultSearch, expect, test } from './fixtures/test';
 
 const YOUTUBE_API = 'https://www.youtube.com/iframe_api';
 
@@ -13,6 +14,48 @@ test.describe('resilience', () => {
     await expect(app.currentTitle).toHaveText(song);
   });
 
+  test('the next song plays even when it is the very upload the previous song fell back to', async ({ app }) => {
+    await app.open();
+    const song = await app.searchAndPlayFirst('goo goo dolls iris');
+    const original = (await app.yt())?.videoId ?? '';
+    // Queue the song whose own upload will become the alternate of the playing one
+    await app.search('Goo Goo Goo Dolls Iris');
+    await expect(app.resultRows().first()).toContainText('Goo Goo Goo Dolls Iris');
+    const next = await app.chooseFromTrackMenu(app.results, 0, 'Add to queue');
+    expect(next).not.toBe(song);
+    await app.ytDo('reloadSameVideo', original);
+    await expect.poll(async () => (await app.yt())?.videoId).toBe(fixtureVideoId('search:goo goo goo dolls iris:0'));
+    await expect.poll(() => app.ytState()).toBe(1);
+
+    await app.ytDo('endSong');
+    await expect(app.currentTitle).toHaveText(next);
+    await expect.poll(() => app.ytState(), { message: 'the same video is restarted, not left ended' }).toBe(1);
+  });
+
+  test('a late error of the previous song (it arrives after the switch) leaves the new song alone', async ({ app, api, page }) => {
+    await app.open();
+    await app.searchAndPlayFirst('daft punk');
+    await app.openQueue();
+    await expect.poll(async () => (await app.upcomingTitles()).length).toBeGreaterThanOrEqual(1);
+    const [next] = await app.upcomingTitles();
+    await app.closeQueue();
+    const searchesBefore = api.searches.length;
+    // The player still reports the old video when its error 150 arrives, after the switch to `next`
+    await page.evaluate(() => {
+      (window as unknown as { __yt: { lateErrorOnSwitch: boolean } }).__yt.lateErrorOnSwitch = true;
+    });
+    await app.showControls();
+    await app.nextButton.click();
+    await expect(app.currentTitle).toHaveText(next);
+    await expect.poll(() => app.ytState()).toBe(1);
+    const playing = (await app.yt())?.videoId;
+    await page.waitForTimeout(1200);
+    expect((await app.yt())?.videoId, 'the new song keeps its own upload').toBe(playing);
+    expect(api.searches.slice(searchesBefore), 'no other upload is searched for').toEqual([]);
+    await expect(app.currentTitle).toHaveText(next);
+    await expect(app.notice).toHaveCount(0);
+  });
+
   test('songs that cannot be played are skipped, and three failures in a row stop playback', async ({ app }) => {
     await app.open({ yt: { errorIds: ['*'] } });
     await app.search('broken uploads');
@@ -21,6 +64,53 @@ test.describe('resilience', () => {
     await expect(app.notice).toContainText('Several songs in a row could not be played', { timeout: 20_000 });
     await expect(app.playButton).toBeVisible();
     await expect(app.currentTitle).not.toHaveText(first);
+  });
+
+  test('an upcoming song its owner keeps off other apps gets another upload before it is reached', async ({ app, api }) => {
+    const blocked = fixtureVideoId('search:queen bohemian:2');
+    const alternate = fixtureVideoId('search:queen queen bohemian part 3:0');
+    api.embeddable = (id) => id !== blocked;
+    await app.open();
+    await app.searchAndPlayFirst('queen bohemian');
+    const queued = await app.chooseFromTrackMenu(app.results, 2, 'Add to queue');
+    expect(queued).toBe('Queen Bohemian Part 3');
+    // Checked as soon as it is queued, and replaced by the best-matching other upload
+    await expect.poll(() => api.embeddableChecks).toContain(blocked);
+    await expect.poll(() => api.searches).toContain('Queen Queen Bohemian Part 3');
+    await expect.poll(() => api.embeddableChecks).toContain(alternate);
+
+    await app.ytDo('endSong');
+    await expect.poll(async () => (await app.yt())?.videoId).toBe(alternate);
+    await expect.poll(() => app.ytState()).toBe(1);
+    await expect(app.currentTitle).toHaveText(queued);
+    expect(await app.ytLoadedVideoIds(), 'the blocked upload is never loaded').not.toContain(blocked);
+  });
+
+  test('an upcoming song without another upload is skipped without being loaded, with one notice', async ({ app, api }) => {
+    const blocked = fixtureVideoId('search:queen bohemian:2');
+    api.embeddable = (id) => id !== blocked;
+    api.search = (query) => (query === 'Queen Queen Bohemian Part 3' ? { body: { tracks: [] } } : defaultSearch(query));
+    await app.open();
+    await app.searchAndPlayFirst('queen bohemian');
+    const queued = await app.chooseFromTrackMenu(app.results, 2, 'Add to queue');
+    await expect.poll(() => api.searches).toContain('Queen Queen Bohemian Part 3');
+
+    await app.ytDo('endSong');
+    await expect(app.notice).toHaveText(`“${queued}” can’t be played outside YouTube: its owner turned that off. Skipped.`);
+    await expect(app.currentTitle).not.toHaveText(queued);
+    await expect.poll(() => app.ytState()).toBe(1);
+    expect(await app.ytLoadedVideoIds()).not.toContain(blocked);
+  });
+
+  test('a search result found to be blocked while it starts is replaced at play time', async ({ app, api }) => {
+    const blocked = fixtureVideoId('search:daft punk one more time:0');
+    const alternate = fixtureVideoId('search:daft daft punk one more time:0');
+    api.embeddable = (id) => id !== blocked;
+    await app.open();
+    const song = await app.searchAndPlayFirst('daft punk one more time');
+    await expect.poll(async () => (await app.yt())?.videoId).toBe(alternate);
+    await expect.poll(() => app.ytState()).toBe(1);
+    await expect(app.currentTitle).toHaveText(song);
   });
 
   test('YouTube unreachable: the app waits and retries, then resumes on its own when it is back', async ({ app, page }) => {
