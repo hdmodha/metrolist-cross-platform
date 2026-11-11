@@ -79,6 +79,16 @@ export function toBackgroundUpdate(
   return update;
 }
 
+/**
+ * Where a song that just became active starts: the explicit start request (the same video again,
+ * a seek right after the switch) or 0. The playback clock is only reset in an effect after the
+ * store's subscribers ran, so until then it still holds the previous song's position.
+ */
+export function startPositionAfterSwitch(state: Pick<PlayerState, 'seekRequest'>): number {
+  const ms = state.seekRequest?.ms;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
 export interface SentUpdate {
   update: BackgroundPlaybackUpdate;
   sentAtMs: number;
@@ -192,6 +202,10 @@ export function connectBackgroundPlayback(options: {
   let connected = true;
   let wasPlaying = store.getState().isPlaying;
   let pausedBy: BackgroundPlaybackPausedBy = 'user';
+  // The song whose clock position is right (the restored one keeps its saved position)
+  let knownTrackId = store.getState().activeTrackId;
+  // After a switch the clock is stale until it is reset: what it held, and what to send instead
+  let stale: { clockMs: number; positionMs: number } | null = null;
 
   const ignore = () => undefined;
   const sync = () => {
@@ -199,7 +213,16 @@ export function connectBackgroundPlayback(options: {
     const state = store.getState();
     if (wasPlaying && !state.isPlaying) pausedBy = options.pauseOrigin?.() ?? 'user';
     wasPlaying = state.isPlaying;
-    const next = toBackgroundUpdate(state, clock.getPositionMs(), pausedBy);
+    let positionMs = clock.getPositionMs();
+    if (state.activeTrackId !== knownTrackId) {
+      knownTrackId = state.activeTrackId;
+      stale = state.activeTrackId ? { clockMs: positionMs, positionMs: startPositionAfterSwitch(state) } : null;
+    }
+    if (stale) {
+      if (positionMs === stale.clockMs) positionMs = stale.positionMs;
+      else stale = null;
+    }
+    const next = toBackgroundUpdate(state, positionMs, pausedBy);
     const at = now();
     const plan = planBackgroundSync(last, next, at);
     if (plan === 'skip') return;

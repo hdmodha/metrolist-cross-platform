@@ -20,6 +20,8 @@ import {
 import { APP_BACKGROUND_EVENT, APP_FOREGROUND_EVENT } from '../shared/appBackgroundSignal';
 import { appActivity } from './appActivity';
 import { connectPlayerDebugLog, debugLog } from '../utils/debugLog';
+import { readStreamQualityMode, writeStreamQualityMode, type StreamQualityMode } from './streamQuality';
+import type { StreamQualityDetails } from '../components/YouTubeStreamBridge';
 import {
   fromPersistedState,
   loadPlayerState,
@@ -83,7 +85,9 @@ export interface StreamBinding {
   onError: (code: number, videoId?: string) => void;
   onSeekHandled: (token: number) => void;
   onExternalPlayPause: (playing: boolean) => void;
-  onPlaybackQuality: (quality: string, videoId: string) => void;
+  onPlaybackQuality: (quality: string, videoId: string, details: StreamQualityDetails) => void;
+  /** Read once at start-up: a change (debug page) applies after a restart. */
+  qualityMode: StreamQualityMode;
 }
 
 interface Runtime {
@@ -131,6 +135,8 @@ export function usePlayer() {
   const [audio, setAudio] = React.useState<PersistedAudioSettings>(runtime.audio);
   const audioRef = React.useRef(audio);
   audioRef.current = audio;
+  // Read once: the hidden player's size and quality request apply when a player is created
+  const [qualityMode] = React.useState(() => readStreamQualityMode());
   const [isLoadingRecommendations, setIsLoadingRecommendations] = React.useState(false);
   const [streamStart, setStreamStart] = React.useState<{ nonce: number; positionMs: number; trackId: string | null }>({
     nonce: 0,
@@ -186,6 +192,8 @@ export function usePlayer() {
       toggleShuffle: () => send({ type: 'toggleShuffle' }),
       cycleRepeat: () => send({ type: 'cycleRepeat' }),
       toggleAutoplayRadio: () => send({ type: 'toggleAutoplayRadio' }),
+      /** The hidden player's video quality; saved now, applied after a restart (read once at start-up). */
+      setStreamQualityMode: (mode: StreamQualityMode) => writeStreamQualityMode(mode),
       dismissNotice: (id?: number) => send({ type: 'dismissNotice', id }),
       setVolume: (volume: number) => setAudio((a) => ({ ...a, volume, isMuted: volume === 0 })),
       toggleMute: () =>
@@ -362,12 +370,18 @@ export function usePlayer() {
       onSeekHandled: (token: number) => {
         send({ type: 'seekHandled', token });
       },
-      onPlaybackQuality: (quality: string, videoId: string) => {
+      onPlaybackQuality: (quality: string, videoId: string, details: StreamQualityDetails) => {
         const key = `${videoId} ${quality}`;
         if (qualityLoggedRef.current.has(key)) return;
         if (qualityLoggedRef.current.size > 200) qualityLoggedRef.current.clear();
         qualityLoggedRef.current.add(key);
-        debugLog.add('player', `stream quality: ${quality} (video ${videoId})`);
+        const { mode, width, height, dpr, asked } = details;
+        debugLog.add(
+          'player',
+          `stream quality: ${quality} (video ${videoId}; mode ${mode}, player ${width}x${height} css, dpr ${Math.round(dpr * 100) / 100}${
+            asked ? ', asked small' : mode === 'low' ? ', not asked' : ''
+          })`
+        );
       },
       onExternalPlayPause: (playing: boolean) => {
         debugLog.add('player', `The YouTube player ${playing ? 'started' : 'paused'} by itself`);
@@ -769,6 +783,7 @@ export function usePlayer() {
           seekRequest: state.seekRequest,
           initialPositionMs: streamStart.trackId === activeTrack.id ? streamStart.positionMs : 0,
           retryNonce: streamStart.nonce,
+          qualityMode,
           ...streamCallbacks,
         }
       : null;
