@@ -259,6 +259,19 @@ jobs:
           # The plugin's JUnit tests run the ad-block and system-pause-guard vectors shared with the TypeScript tests
           (cd android && ./gradlew assembleDebug :metrolist-capacitor-background-playback:testDebugUnitTest --no-daemon)
 
+      - name: Archive the APK and the Android Studio project
+        run: |
+          mkdir -p release-mobile
+          cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
+          7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+
+      - name: Upload Android Artifacts (APK + Android Studio project)
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrolist-mobile-native
+          path: release-mobile/*
+
+      # After the upload on purpose: the APK can be tried even if a check fails, and the job still fails.
       - name: Verify the APK (background-playback WebView, layout, plugin assets)
         run: |
           apk=android/app/build/outputs/apk/debug/app-debug.apk
@@ -294,15 +307,6 @@ jobs:
             test "$(printf '%s\n' "$ids" | grep -c 'id/webview')" -eq 1
             grep -q -e "=@$webview_id" -e '@id/webview' -e '@+id/webview' "$RUNNER_TEMP/layout.txt" || { echo "the layout's id is not @id/webview ($webview_id)" >&2; exit 1; }
           fi
-          mkdir -p release-mobile
-          cp "$apk" release-mobile/metrolist-android-universal.apk
-          7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
-
-      - name: Upload Android Artifacts (APK + Android Studio project)
-        uses: actions/upload-artifact@v4
-        with:
-          name: metrolist-mobile-native
-          path: release-mobile/*
 
   # 3b. iOS via Capacitor 6 (CocoaPods): the prepared Xcode project, compiled for the simulator
   #     without signing. Proves the Swift plugin compiles against Capacitor 6, the WebKit
@@ -332,12 +336,11 @@ jobs:
           test -f node_modules/@metrolist/capacitor-background-playback/package.json
           npm run build
 
-      - name: Run the shared vectors against the Swift guard; compile the content-blocker list with WebKit
+      - name: Run the shared vectors against the Swift guard
         working-directory: native/capacitor-background-playback
         run: |
           swiftc ios/Plugin/SystemPauseGuard.swift ios/Tests/main.swift -o "$RUNNER_TEMP/guard-vectors"
           "$RUNNER_TEMP/guard-vectors" android/src/test/resources/system-pause-guard-vectors.json
-          swift ios/Tests/compile-content-blocker.swift ios/Resources/metrolist-content-blocker.json
 
       - name: Generate & prepare the iOS project
         run: |
@@ -378,6 +381,14 @@ jobs:
         with:
           name: metrolist-ios-native
           path: release-mobile/*
+
+      # After the upload on purpose: the artifact exists even if this check fails, and the job still fails.
+      # WebKit's own compiler (macOS, same content-extension parser as iOS) must accept the generated list,
+      # or the app would run without ad blocking (it logs the compile error).
+      - name: Compile the content-blocker list with WebKit
+        working-directory: native/capacitor-background-playback
+        timeout-minutes: 5
+        run: swift ios/Tests/compile-content-blocker.swift ios/Resources/metrolist-content-blocker.json
 
   # 4. Publish All Platform Builds to GitHub Releases
   # Skipped for a manual run with "publish" unticked (artifacts are still uploaded to the run).
