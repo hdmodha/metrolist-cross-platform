@@ -456,6 +456,13 @@ describe('unplayable songs and alternate uploads', () => {
     assert.match(state.notice?.message ?? '', /can’t be played/);
   });
 
+  test('the notice says why the song is skipped', () => {
+    const blocked = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'embedDisabled' });
+    assert.equal(blocked.notice?.message, '“Song a” can’t be played outside YouTube: its owner turned that off. Skipping…');
+    const removed = run(live(), { type: 'trackUnplayable', trackId: ytId('a'), random: 0, reason: 'unavailable' });
+    assert.match(removed.notice?.message ?? '', /removed from YouTube or is private/);
+  });
+
   test('stops after 3 consecutive failures, and a playing stream resets the counter', () => {
     let state = run(
       live(),

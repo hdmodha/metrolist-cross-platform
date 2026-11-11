@@ -3,7 +3,7 @@
  * how to recover from a stream error, when to wait for the network, when to save the position and
  * which keys are shortcuts.
  */
-import { deriveSongSearchTerms, type InnerTubeParsedTrack } from '../utils/metrolistCore';
+import { deriveSongSearchTerms } from '../utils/metrolistCore';
 import {
   selectActiveTrack,
   selectCanTryAlternateVideo,
@@ -12,39 +12,50 @@ import {
   type StreamStatus,
 } from './playerCore';
 import { canRetryNetwork } from './retryPolicy';
+import { classifyStreamError, type UnplayableReason } from './streamErrors';
 
 /** Error code reported when the YouTube IFrame API script itself cannot be loaded (offline, blocked). */
 export const STREAM_ERROR_API_UNAVAILABLE = -1;
 
 export type StreamErrorPlan =
   | { kind: 'waitForNetwork' }
-  | { kind: 'findAlternate'; trackId: string; query: string; tried: string[] }
-  | { kind: 'skip'; trackId: string };
+  /** Re-create the player for the same video once (`retried` tells whether that already happened). */
+  | { kind: 'retry'; trackId: string; videoId: string; reason: UnplayableReason }
+  | { kind: 'findAlternate'; trackId: string; videoId: string; query: string; tried: string[]; reason: UnplayableReason }
+  | { kind: 'skip'; trackId: string; reason: UnplayableReason };
 
-/** What to do when the stream of the active track reports an error. */
+/** The search query for other uploads of a song. */
+export function alternateSearchQuery(track: { title: string; artist: string }): string {
+  const terms = deriveSongSearchTerms(track.title, track.artist);
+  return `${terms.artistName} ${terms.trackName}`.trim();
+}
+
+/**
+ * What to do when the stream of the active track reports an error (codes: `streamErrors.ts`).
+ * `retried` = the player was already re-created once for this track's current video.
+ */
 export function planStreamErrorRecovery(
   state: PlayerState,
-  error: { code: number; online: boolean }
+  error: { code: number; online: boolean; retried: boolean }
 ): StreamErrorPlan | null {
   const track = selectActiveTrack(state);
   if (!track) return null;
   if (error.code === STREAM_ERROR_API_UNAVAILABLE || !error.online) return { kind: 'waitForNetwork' };
-  if (!selectCanTryAlternateVideo(state, track.id)) return { kind: 'skip', trackId: track.id };
-  const terms = deriveSongSearchTerms(track.title, track.artist);
+  const { reason, recovery } = classifyStreamError(error.code);
+  if (recovery !== 'alternate' && !error.retried) {
+    return { kind: 'retry', trackId: track.id, videoId: track.videoId, reason };
+  }
+  if (recovery === 'retryThenSkip' || !selectCanTryAlternateVideo(state, track.id)) {
+    return { kind: 'skip', trackId: track.id, reason };
+  }
   return {
     kind: 'findAlternate',
     trackId: track.id,
-    query: `${terms.artistName} ${terms.trackName}`.trim(),
+    videoId: track.videoId,
+    query: alternateSearchQuery(track),
     tried: selectTriedVideoIds(state, track.id),
+    reason,
   };
-}
-
-/** Another upload of the same song: the first search result that has not been tried yet. */
-export function pickAlternateUpload(
-  candidates: InnerTubeParsedTrack[],
-  tried: string[]
-): InnerTubeParsedTrack | null {
-  return candidates.find((c) => !tried.includes(c.videoId)) ?? null;
 }
 
 /** How long a stream may sit in loading / buffering while offline before we wait for the network. */

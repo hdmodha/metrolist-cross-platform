@@ -21,6 +21,7 @@ import {
   type RepeatMode,
 } from './queueRules';
 import { canRetryNetwork, computeRetryDelayMs } from './retryPolicy';
+import { unplayableNotice, type UnplayableReason } from './streamErrors';
 
 /* ------------------------------------------- limits ------------------------------------------ */
 
@@ -123,8 +124,8 @@ export type PlayerAction =
   | { type: 'previous'; positionMs: number }
   /** `trackId` guards against a late "ended" event of a song that is no longer playing. */
   | { type: 'trackEnded'; random: number; trackId?: string }
-  /** The song cannot be played (alternate uploads exhausted). */
-  | { type: 'trackUnplayable'; trackId: string; random: number }
+  /** The song cannot be played (alternate uploads exhausted); `reason` picks the notice. */
+  | { type: 'trackUnplayable'; trackId: string; random: number; reason?: UnplayableReason }
   | { type: 'alternateVideoFound'; trackId: string; videoId: string; durationMs?: number }
   | { type: 'streamStatusChanged'; status: StreamStatus }
   | { type: 'seekRequested'; ms: number }
@@ -444,7 +445,12 @@ function shuffleList(
   return startFromList({ ...state, shuffleEnabled: true }, start, followUps, source);
 }
 
-function trackUnplayable(state: PlayerState, trackId: string, random: number): PlayerState {
+function trackUnplayable(
+  state: PlayerState,
+  trackId: string,
+  random: number,
+  reason: UnplayableReason | undefined
+): PlayerState {
   const failed = getTrack(state, trackId);
   if (!failed || trackId !== state.activeTrackId) return state;
   const failures = state.consecutiveStreamFailures + 1;
@@ -455,7 +461,7 @@ function trackUnplayable(state: PlayerState, trackId: string, random: number): P
     );
   }
   const skipped = skip({ ...state, consecutiveStreamFailures: failures }, 1, 'error', random);
-  return withNotice(skipped, `“${failed.title}” can’t be played here. Skipping…`);
+  return withNotice(skipped, unplayableNotice(failed.title, reason));
 }
 
 function alternateVideoFound(
@@ -684,7 +690,7 @@ function reduce(state: PlayerState, action: PlayerAction): PlayerState {
       if (action.trackId !== undefined && action.trackId !== state.activeTrackId) return state;
       return skip(state, 1, 'ended', action.random);
     case 'trackUnplayable':
-      return trackUnplayable(state, action.trackId, action.random);
+      return trackUnplayable(state, action.trackId, action.random, action.reason);
     case 'alternateVideoFound':
       return alternateVideoFound(state, action.trackId, action.videoId, action.durationMs);
     case 'streamStatusChanged': {

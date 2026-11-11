@@ -22,11 +22,11 @@ import {
   STALL_BEFORE_WAITING_MS,
   isPositionSaveDue,
   planNetworkRetry,
-  pickAlternateUpload,
   planStreamErrorRecovery,
   shortcutForKey,
   shouldWaitForNetworkAfterStall,
 } from './effectPolicies';
+import { chooseAlternateUpload, rankAlternateUploads } from './alternateUploads';
 import { createPlaybackClock, type PlaybackClock } from './playbackClock';
 import {
   createInitialPlayerState,
@@ -181,19 +181,38 @@ export function usePlayer() {
 
   /* ------------------------------------ stream callbacks ------------------------------------- */
 
+  /** `trackId videoId` pairs whose player was already re-created once after an error. */
+  const retriedStreamsRef = React.useRef(new Set<string>());
+
   const recoverFromStreamError = React.useCallback(
     async (code: number) => {
       const online = typeof navigator === 'undefined' || navigator.onLine !== false;
-      const plan = planStreamErrorRecovery(store.getState(), { code, online });
+      const current = selectActiveTrack(store.getState());
+      const retryKey = current ? `${current.id} ${current.videoId}` : '';
+      const plan = planStreamErrorRecovery(store.getState(), {
+        code,
+        online,
+        retried: retriedStreamsRef.current.has(retryKey),
+      });
       if (!plan) return;
       if (plan.kind === 'waitForNetwork') {
         send({ type: 'networkLost' });
         return;
       }
+      if (plan.kind === 'retry') {
+        // A player error can be transient: create the player again for the same video, once
+        retriedStreamsRef.current.add(retryKey);
+        reinitStream();
+        return;
+      }
       if (plan.kind === 'findAlternate') {
         try {
           // Some uploads cannot be played outside youtube.com: look for another upload of the song
-          const alternate = pickAlternateUpload(await searchTracks(plan.query), plan.tried);
+          const track = selectActiveTrack(store.getState());
+          const candidates = await searchTracks(plan.query);
+          const alternate = track
+            ? chooseAlternateUpload(rankAlternateUploads(track, candidates, plan.tried), () => undefined)
+            : null;
           if (store.getState().activeTrackId !== plan.trackId) return;
           if (
             alternate &&
@@ -214,9 +233,9 @@ export function usePlayer() {
         }
         if (store.getState().activeTrackId !== plan.trackId) return;
       }
-      send({ type: 'trackUnplayable', trackId: plan.trackId, random: Math.random() });
+      send({ type: 'trackUnplayable', trackId: plan.trackId, random: Math.random(), reason: plan.reason });
     },
-    [send, store]
+    [reinitStream, send, store]
   );
 
   const streamCallbacks = React.useMemo(
