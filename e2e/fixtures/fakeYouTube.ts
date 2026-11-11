@@ -19,6 +19,11 @@ export interface FakeYouTubeOptions {
   durations?: Record<string, number>;
   /** Playback speed multiplier. */
   speed?: number;
+  /**
+   * URLs every new player requests from inside its iframe, like the real player's ad / stats
+   * requests (the desktop suite checks which ones the ad blocker cancels). Outcomes land in `probes`.
+   */
+  probeUrls?: string[];
 }
 
 export interface FakePlayerDebug {
@@ -39,6 +44,8 @@ export interface FakePlayer {
 }
 
 export interface FakeYouTubeControl extends Required<FakeYouTubeOptions> {
+  /** `ok` / `failed` per probe URL (the newest player's request). */
+  probes: Record<string, 'ok' | 'failed'>;
   instances: FakePlayer[];
   /** Every video id a player was created with, loaded or cued, in order. */
   loaded: string[];
@@ -69,6 +76,8 @@ export function installFakeYouTubeApi(): void {
   ctl.blocked = !!ctl.blocked;
   ctl.errorIds = ctl.errorIds || [];
   ctl.durations = ctl.durations || {};
+  ctl.probeUrls = ctl.probeUrls || [];
+  ctl.probes = {};
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
     const self = this;
@@ -163,6 +172,18 @@ export function installFakeYouTubeApi(): void {
       }
     }, 100);
     ctl.instances.push(self);
+    const frameWindow = iframe.contentWindow as (Window & typeof globalThis) | null;
+    for (const url of ctl.probeUrls) {
+      // From the player's own frame, like the real player's requests (opaque `no-cors` answers count as ok)
+      (frameWindow || window).fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(
+        () => {
+          ctl.probes[url] = 'ok';
+        },
+        () => {
+          ctl.probes[url] = 'failed';
+        }
+      );
+    }
     setTimeout(() => {
       if (destroyed) return;
       if (opts.events.onReady) opts.events.onReady({ target: self });

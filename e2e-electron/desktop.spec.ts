@@ -1,4 +1,4 @@
-/** The desktop app (Electron): window, link policy, single instance, saved window state and data. */
+/** The desktop app (Electron): window, link policy, single instance, saved window state and data, ad blocking. */
 import { expect, test } from '@playwright/test';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -190,5 +190,46 @@ test('the server rejects a request for another host name (DNS rebinding)', async
   expect(await status('evil.example:47823')).toBe(403);
   expect(await status('127.0.0.1:47823')).toBe(200);
   expect(await status('localhost:47823')).toBe(200);
+  await close(app);
+});
+
+test('ad and tracking requests of the YouTube player are cancelled; playback requests are not', async () => {
+  const app = await launch(newProfile());
+  const stdout: string[] = [];
+  app.electronApp.process().stdout?.on('data', (chunk: Buffer) => stdout.push(chunk.toString()));
+  const AD = 'https://googleads.g.doubleclick.net/pagead/id';
+  const PLAYBACK = 'https://www.youtube.com/api/stats/playback?ns=yt&el=embedded&docid=probe';
+  const routed: string[] = [];
+  const failures: Record<string, string> = {};
+  app.page.on('requestfailed', (request) => {
+    failures[request.url()] = request.failure()?.errorText ?? '';
+  });
+  // Routes for both, so neither can fall into the suite's catch-all (which aborts unrouted requests
+  // with the same ERR_BLOCKED_BY_CLIENT): a request reaching the ad route goes on to the network
+  // (a dead proxy here), so only the main process's ad blocker can produce ERR_BLOCKED_BY_CLIENT
+  await app.page.route(AD, (route) => {
+    routed.push(AD);
+    return route.continue();
+  });
+  await app.page.route('https://www.youtube.com/api/stats/playback**', (route) => {
+    routed.push(PLAYBACK);
+    return route.fulfill({ status: 204, body: '' });
+  });
+  await app.page.addInitScript((urls) => {
+    (window as unknown as { __yt?: unknown }).__yt = { probeUrls: urls };
+  }, [AD, PLAYBACK]);
+  await app.page.reload();
+
+  const player = new MetrolistApp(app.page);
+  await player.searchAndPlayFirst('daft punk around the world');
+  const probes = () =>
+    app.page.evaluate(() => (window as unknown as { __yt: { probes: Record<string, string> } }).__yt.probes);
+  await expect.poll(probes).toEqual({ [AD]: 'failed', [PLAYBACK]: 'ok' });
+  expect(failures[AD]).toBe('net::ERR_BLOCKED_BY_CLIENT');
+  expect(routed).toContain(PLAYBACK);
+  // The main process counted it (its debug line), so the cancel came from the ad blocker
+  await expect.poll(() => stdout.join('')).toContain('[metrolist] ad blocker: 1 ad / tracking request(s) blocked so far (latest: googleads.g.doubleclick.net)');
+  // Electron's webRequest runs before Playwright's page routes: a cancelled request never reaches them
+  expect(routed).not.toContain(AD);
   await close(app);
 });

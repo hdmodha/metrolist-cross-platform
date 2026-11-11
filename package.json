@@ -19,6 +19,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist dist-server dist-electron release",
     "lint": "tsc --noEmit",
+    "adblock:rules": "tsx scripts/generate-ad-block-rules.ts",
     "test": "tsx --test \"src/**/*.test.ts\" \"electron/**/*.test.ts\"",
     "test:e2e": "playwright test",
     "test:electron": "npm run build && npm run build:electron && playwright test -c playwright.electron.config.ts",
