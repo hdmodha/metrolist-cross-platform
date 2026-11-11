@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "description": "Generated from src/shared/adBlock.ts by `npm run adblock:rules`; do not edit. A host rule matches the host and its subdomains. Never-block entries win over every rule. Top-level navigations and non-http(s) URLs are never blocked.",
+  "blockHosts": [
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "google-analytics.com",
+    "googletagservices.com",
+    "adservice.google.com"
+  ],
+  "blockPaths": [
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/pagead/"
+    },
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/ptracking"
+    },
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/api/stats/ads"
+    },
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/api/stats/atr"
+    },
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/get_midroll_info"
+    },
+    {
+      "hosts": [
+        "youtube.com",
+        "youtube-nocookie.com"
+      ],
+      "pathPrefix": "/youtubei/v1/log_event"
+    }
+  ],
+  "neverBlockHosts": [
+    "googlevideo.com",
+    "ytimg.com",
+    "ggpht.com",
+    "googleusercontent.com",
+    "gstatic.com",
+    "googleapis.com"
+  ],
+  "neverBlockPaths": [
+    "/iframe_api",
+    "/s/player/",
+    "/embed/",
+    "/youtubei/v1/player",
+    "/youtubei/v1/next",
+    "/api/stats/playback",
+    "/api/stats/watchtime"
+  ]
+}

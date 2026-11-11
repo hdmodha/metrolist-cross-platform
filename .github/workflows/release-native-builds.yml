@@ -222,10 +222,14 @@ jobs:
           distribution: "temurin"
           java-version: "21"
 
+      # The local Capacitor plugin (native/capacitor-background-playback: Android background play and
+      # ad blocking) is a `file:` devDependency, so this install links it into node_modules/@metrolist/
+      # before `cap sync` looks for plugins.
       - name: Install dependencies & build web assets
         run: |
           rm -f package-lock.json
           npm install --legacy-peer-deps
+          test -f node_modules/@metrolist/capacitor-background-playback/package.json
           npm run build
 
       - name: Generate Android & iOS Native Capacitor Projects & Build APK
@@ -236,13 +240,20 @@ jobs:
           npx cap sync
           mkdir -p release-mobile
           if [ -d "android" ]; then
+            # cap sync must have registered the local plugin (Gradle module :metrolist-capacitor-background-playback)
+            grep -q '"com.metrolist.backgroundplayback.BackgroundPlaybackPlugin"' android/app/src/main/assets/capacitor.plugins.json
+            grep -q "metrolist-capacitor-background-playback" android/capacitor.settings.gradle
             if [ -n "$ANDROID_HOME" ]; then
               echo "sdk.dir=$ANDROID_HOME" > android/local.properties
             elif [ -d "/usr/local/lib/android/sdk" ]; then
               echo "sdk.dir=/usr/local/lib/android/sdk" > android/local.properties
             fi
             chmod +x android/gradlew
-            (cd android && ./gradlew assembleDebug --no-daemon)
+            # The plugin's JUnit test runs the ad-block vectors shared with the TypeScript tests
+            (cd android && ./gradlew assembleDebug :metrolist-capacitor-background-playback:testDebugUnitTest --no-daemon)
+            # The APK carries the plugin's assets (page-visibility script, ad-block rules)
+            unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/metrolist-page-visibility.js'
+            unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/metrolist-ad-block-rules.json'
             cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
             7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
           fi

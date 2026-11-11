@@ -20,7 +20,7 @@
     "clean": "rm -rf dist dist-server dist-electron release",
     "lint": "tsc --noEmit",
     "adblock:rules": "tsx scripts/generate-ad-block-rules.ts",
-    "test": "tsx --test \"src/**/*.test.ts\" \"electron/**/*.test.ts\"",
+    "test": "tsx --test \"src/**/*.test.ts\" \"electron/**/*.test.ts\" \"native/*/src/**/*.test.ts\"",
     "test:e2e": "playwright test",
     "test:electron": "npm run build && npm run build:electron && playwright test -c playwright.electron.config.ts",
     "desktop:dev": "npm run build:electron && electron . --metrolist-dev",
@@ -28,6 +28,7 @@
     "desktop:dist": "npm run build && npm run build:electron && electron-builder --publish never"
   },
   "devDependencies": {
+    "@metrolist/capacitor-background-playback": "file:native/capacitor-background-playback",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": ">=4.1.0",
     "@types/express": ">=4.17.21",
