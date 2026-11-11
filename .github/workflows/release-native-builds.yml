@@ -1,4 +1,4 @@
-name: Build & Publish Release Artifacts (macOS, Windows, Android, iOS, Web)
+name: Build & Publish Release Artifacts (macOS, Windows, Linux, Android, iOS, Web)
 
 on:
   push:
@@ -72,10 +72,11 @@ jobs:
           name: metrolist-web-release
           path: metrolist-portable-web-and-server.zip
 
-  # 2. Native desktop apps (Electron + electron-builder): a universal macOS .dmg and a Windows NSIS
-  #    installer. Each job smoke-tests the packaged app (METROLIST_SMOKE_TEST=1) before uploading it.
+  # 2. Native desktop apps (Electron + electron-builder): a universal macOS .dmg, Windows NSIS
+  #    installers (x64, arm64) and Linux AppImage + .deb (x64, arm64). Each job smoke-tests the packaged
+  #    app for the runner's own architecture (METROLIST_SMOKE_TEST=1) before uploading.
+  #    The build jobs do not wait for verify-and-bundle-web (it is the test gate for publishing).
   build-desktop-installers:
-    needs: verify-and-bundle-web
     strategy:
       fail-fast: false
       matrix:
@@ -84,8 +85,13 @@ jobs:
             platform_name: macos-universal
             artifact_glob: release/*.dmg
           - os: windows-latest
-            platform_name: windows-x64
+            platform_name: windows
             artifact_glob: release/*-setup.exe
+          - os: ubuntu-latest
+            platform_name: linux
+            artifact_glob: |
+              release/*.AppImage
+              release/*.deb
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     defaults:
@@ -178,7 +184,7 @@ jobs:
           if [ -n "$SECRET_WIN_CSC_LINK" ]; then
             export WIN_CSC_LINK="$SECRET_WIN_CSC_LINK" WIN_CSC_KEY_PASSWORD="$SECRET_WIN_CSC_KEY_PASSWORD"
           fi
-          npx electron-builder --win --x64 --publish never
+          npx electron-builder --win --x64 --arm64 --publish never
 
       # A GUI-subsystem exe's stdout may not reach the log, so the verdict is also written to a file;
       # the exit code alone decides.
@@ -196,6 +202,20 @@ jobs:
           Write-Host "Exit code: $code"
           if ($null -eq $code -or $code -ne 0) { exit 1 }
 
+      - name: Package Linux AppImage + .deb (x64, arm64)
+        if: runner.os == 'Linux'
+        run: npx electron-builder --linux AppImage deb --x64 --arm64 --publish never
+
+      # Under a virtual display; --no-sandbox because Ubuntu 24.04's AppArmor blocks Chromium's sandbox
+      # for an unpacked app (the .deb installs chrome-sandbox setuid; the AppImage may need the flag too).
+      - name: Smoke-test the packaged Linux app (x64)
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb > /dev/null
+          xvfb-run -a env METROLIST_SMOKE_TEST=1 release/linux-unpacked/metrolist --no-sandbox
+          dpkg-deb --info release/*-linux-amd64.deb | grep -E 'Package|Version|Architecture'
+
       - name: Upload desktop installer (${{ matrix.platform_name }})
         uses: actions/upload-artifact@v4
         with:
@@ -203,11 +223,14 @@ jobs:
           path: ${{ matrix.artifact_glob }}
           if-no-files-found: error
 
-  # 3a. Android (.apk) via Capacitor 6. `npm run native:prepare` installs Metrolist's MainActivity
+  # 3a. Android via Capacitor 6. `npm run native:prepare` installs Metrolist's MainActivity
   #     (native/android-app/MainActivity.java), whose WebView keeps playing when the app is
-  #     minimised; the job proves the APK carries it.
+  #     minimised; the job proves the APK carries it. The version comes from the release tag.
+  #     With the ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS /
+  #     ANDROID_KEY_PASSWORD secrets it ships a signed release APK + .aab (Play Store), signed with the
+  #     same key every release, so updates install over the previous version. Without them it ships a
+  #     debug APK (signed with a throw-away key: uninstall the old version before installing it).
   build-mobile-bundles:
-    needs: verify-and-bundle-web
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -232,12 +255,26 @@ jobs:
       # before `cap sync` looks for plugins.
       - name: Install dependencies & build web assets
         run: |
-          rm -f package-lock.json
-          npm install --legacy-peer-deps
+          npm ci --legacy-peer-deps
           test -f node_modules/@metrolist/capacitor-background-playback/package.json
           npm run build
 
+      - name: Cache Gradle downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'native/capacitor-background-playback/android/build.gradle') }}
+          restore-keys: gradle-${{ runner.os }}-
+
       - name: Generate & prepare the Android project, build the APK
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           npm install --no-save --legacy-peer-deps @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           npx cap add android
@@ -256,14 +293,70 @@ jobs:
             echo "sdk.dir=$ANDROID_HOME" > android/local.properties
           fi
           chmod +x android/gradlew
-          # The plugin's JUnit tests run the ad-block and system-pause-guard vectors shared with the TypeScript tests
-          (cd android && ./gradlew assembleDebug :metrolist-capacitor-background-playback:testDebugUnitTest --no-daemon)
 
-      - name: Archive the APK and the Android Studio project
+          # Version from the tag: versionName X.Y.Z, versionCode X*10000 + Y*100 + Z (always increasing)
+          version="${RELEASE_TAG#v}"
+          version="${version%%[-+]*}"
+          IFS=. read -r major minor patch <<< "$version"
+          if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] || [ "$minor" -gt 99 ] || [ "$patch" -gt 99 ]; then
+            echo "Release tag '$RELEASE_TAG' is not vX.Y.Z (minor and patch <= 99)" >&2
+            exit 1
+          fi
+          code=$((major * 10000 + minor * 100 + patch))
+          sed -i -E "s/versionCode [0-9]+/versionCode $code/; s/versionName \"[^\"]*\"/versionName \"$version\"/" android/app/build.gradle
+          grep -E 'versionCode|versionName' android/app/build.gradle
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+          # The plugin's JUnit tests run the ad-block and system-pause-guard vectors shared with the TypeScript tests
+          tasks=(:metrolist-capacitor-background-playback:testDebugUnitTest)
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Signing secrets found: building the signed release APK + .aab"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            export METROLIST_KEYSTORE="$RUNNER_TEMP/release.keystore" METROLIST_KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD" \
+              METROLIST_KEY_ALIAS="$KEY_ALIAS" METROLIST_KEY_PASSWORD="$KEY_PASSWORD"
+            # A second android {} block (Groovy merges it): the release build type is signed from the environment
+            cat >> android/app/build.gradle <<'GRADLE'
+
+          android {
+              signingConfigs {
+                  metrolistRelease {
+                      storeFile file(System.getenv('METROLIST_KEYSTORE'))
+                      storePassword System.getenv('METROLIST_KEYSTORE_PASSWORD')
+                      keyAlias System.getenv('METROLIST_KEY_ALIAS')
+                      keyPassword System.getenv('METROLIST_KEY_PASSWORD')
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.metrolistRelease
+                  }
+              }
+          }
+          GRADLE
+            tasks+=(assembleRelease bundleRelease)
+            echo "APK=android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+          else
+            echo "No ANDROID_KEYSTORE_BASE64 secret: building the debug APK"
+            tasks+=(assembleDebug)
+            echo "APK=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+          fi
+          (cd android && ./gradlew "${tasks[@]}" --no-daemon)
+
+      - name: Archive the APK (+ .aab) and the Android Studio project
         run: |
           mkdir -p release-mobile
-          cp android/app/build/outputs/apk/debug/app-debug.apk release-mobile/metrolist-android-universal.apk
-          7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json
+          if [ "$SIGNED" = true ]; then
+            cp "$APK" "release-mobile/Metrolist-$VERSION-android.apk"
+            cp android/app/build/outputs/bundle/release/app-release.aab "release-mobile/Metrolist-$VERSION-android.aab"
+            # The signature: the same certificate on every release
+            "$(ls -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/ | sort -V | tail -1)apksigner" verify --print-certs "$APK" | head -5
+          else
+            cp "$APK" "release-mobile/Metrolist-$VERSION-android-debug.apk"
+          fi
+          rm -f "$RUNNER_TEMP/release.keystore"
+          7z a -tzip release-mobile/metrolist-android-studio-project.zip android capacitor.config.json -xr'!build' -xr'!.gradle'
 
       - name: Upload Android Artifacts (APK + Android Studio project)
         uses: actions/upload-artifact@v4
@@ -274,7 +367,7 @@ jobs:
       # After the upload on purpose: the APK can be tried even if a check fails, and the job still fails.
       - name: Verify the APK (background-playback WebView, layout, plugin assets)
         run: |
-          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          apk="$APK"
           sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           # The plugin's assets (page-visibility script, ad-block rules)
           unzip -l "$apk" | grep -q 'assets/metrolist-page-visibility.js'
@@ -308,12 +401,13 @@ jobs:
             grep -q -e "=@$webview_id" -e '@id/webview' -e '@+id/webview' "$RUNNER_TEMP/layout.txt" || { echo "the layout's id is not @id/webview ($webview_id)" >&2; exit 1; }
           fi
 
-  # 3b. iOS via Capacitor 6 (CocoaPods): the prepared Xcode project, compiled for the simulator
-  #     without signing. Proves the Swift plugin compiles against Capacitor 6, the WebKit
-  #     content-blocker list compiles, and the Swift guard passes the shared vectors. Not a device
-  #     test: background audio and the lock screen still need a phone.
+  # 3b. iOS via Capacitor 6 (CocoaPods): compiled for the simulator (proves the Swift plugin compiles
+  #     against Capacitor 6, the WebKit content-blocker list compiles, the Swift guard passes the shared
+  #     vectors) and for devices without signing: an unsigned .ipa that sideloading tools (AltStore,
+  #     Sideloadly) sign with the listener's own Apple ID. A signed App Store / TestFlight build needs a
+  #     paid Apple Developer account. Not a device test: background audio and the lock screen still need
+  #     a phone.
   build-ios-app:
-    needs: verify-and-bundle-web
     runs-on: macos-latest
     timeout-minutes: 45
     defaults:
@@ -371,12 +465,44 @@ jobs:
           find "$app" -name 'metrolist-page-visibility.js' | grep -q .
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$app/Info.plist" | grep -qx audio
 
+      # Release build for devices with signing off; the .app goes into Payload/ and is zipped as an .ipa.
+      # Version from the tag (MARKETING_VERSION / CURRENT_PROJECT_VERSION, same numbers as Android).
+      - name: Build the unsigned iOS app (.ipa) for devices
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          version="${version%%[-+]*}"
+          IFS=. read -r major minor patch <<< "$version"
+          if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]]; then
+            echo "Release tag '$RELEASE_TAG' is not vX.Y.Z" >&2
+            exit 1
+          fi
+          build=$((major * 10000 + minor * 100 + patch))
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/ios-device" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" \
+            build > "$RUNNER_TEMP/xcodebuild-device.log" 2>&1 \
+            || { tail -200 "$RUNNER_TEMP/xcodebuild-device.log"; exit 1; }
+          tail -5 "$RUNNER_TEMP/xcodebuild-device.log"
+          app="$RUNNER_TEMP/ios-device/Build/Products/Release-iphoneos/App.app"
+          test -d "$app"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$app/Info.plist" | grep -qx audio
+          lipo -archs "$app/App" | grep -q arm64
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" release-mobile
+          cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/release-mobile/Metrolist-$version-ios-unsigned.ipa" Payload)
+          unzip -l "release-mobile/Metrolist-$version-ios-unsigned.ipa" | grep -q 'Payload/App.app/Info.plist'
+
       - name: Archive the prepared Xcode project
         run: |
           mkdir -p release-mobile
           7z a -tzip release-mobile/metrolist-ios-xcode-project.zip ios capacitor.config.json -xr'!build'
 
-      - name: Upload iOS Artifact (prepared Xcode project)
+      - name: Upload iOS Artifacts (unsigned .ipa + prepared Xcode project)
         uses: actions/upload-artifact@v4
         with:
           name: metrolist-ios-native
@@ -403,6 +529,31 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      # A checksum file for every download, and a "which file do I need" table above the generated notes
+      - name: Checksums and download guide
+        run: |
+          cd release-assets
+          ls -la
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cat > "$RUNNER_TEMP/release-body.md" <<'EOF'
+          ## Downloads
+
+          | Device | File |
+          |---|---|
+          | **macOS** (Apple Silicon and Intel) | `Metrolist-<version>-mac-universal.dmg`: open it, drag Metrolist to Applications; the first time, right-click → Open (not notarized) |
+          | **Windows** (most PCs) | `Metrolist-<version>-win-x64-setup.exe`; SmartScreen: More info → Run anyway |
+          | **Windows on ARM** (Snapdragon PCs) | `Metrolist-<version>-win-arm64-setup.exe` |
+          | **Linux** (Ubuntu, Debian, Mint, …) | `Metrolist-<version>-linux-amd64.deb` (`sudo apt install ./Metrolist-…-linux-amd64.deb`), or `-linux-arm64.deb` on ARM |
+          | **Linux** (any distribution) | `Metrolist-<version>-linux-x86_64.AppImage` or `-linux-arm64.AppImage`: make it executable and run it (add `--no-sandbox` if it does not start) |
+          | **Android** | `Metrolist-<version>-android.apk` (signed release; the `.aab` is for Google Play), or `-android-debug.apk` when the release is not signed (uninstall the previous version first) |
+          | **iOS / iPadOS** | `Metrolist-<version>-ios-unsigned.ipa`: install with AltStore or Sideloadly, which sign it with your Apple ID (untested on a device) |
+          | **Web / your own server** | `metrolist-portable-web-and-server.zip`: unzip, run `node dist-server/server.mjs`, open http://localhost:3000 |
+
+          Check a download with `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS.txt --ignore-missing`). The Android Studio and Xcode project zips are for building the apps yourself.
+          EOF
+          echo "BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
+
       - name: Create GitHub Release & Attach Binaries
         uses: softprops/action-gh-release@v2
         with:
@@ -410,5 +561,6 @@ jobs:
           name: "Metrolist Cross-Platform Release (${{ inputs.release_tag || github.ref_name }})"
           draft: false
           prerelease: false
+          body_path: ${{ env.BODY_PATH }}
           generate_release_notes: true
           files: release-assets/*

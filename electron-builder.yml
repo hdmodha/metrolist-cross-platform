@@ -40,10 +40,12 @@ dmg:
 win:
   target:
     - target: nsis
-      arch: [x64]
+      arch: [x64, arm64] # Intel / AMD PCs and Windows on ARM (Snapdragon) PCs
 
 nsis:
-  artifactName: Metrolist-${version}-win-x64-setup.${ext}
+  # One installer per architecture (not one installer carrying both)
+  buildUniversalInstaller: false
+  artifactName: Metrolist-${version}-win-${arch}-setup.${ext}
   # Per-user install into %LOCALAPPDATA%\Programs\Metrolist: no administrator rights
   oneClick: true
   perMachine: false
@@ -56,8 +58,24 @@ nsis:
   deleteAppDataOnUninstall: false
   differentialPackage: false
 
-# Linux is not shipped; `--linux dir` only proves packaging in CI-less environments.
+# Linux: an AppImage (runs on most distributions, no install) and a .deb (Debian, Ubuntu, Mint, …),
+# each for x64 and arm64.
 linux:
-  target: dir
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]
   category: Audio
   executableName: metrolist
+  synopsis: Ad-free music player powered by YouTube Music
+  # The .deb needs a maintainer; package.json's author has no e-mail address on purpose
+  maintainer: Metrolist contributors
+  vendor: Metrolist contributors
+  artifactName: Metrolist-${version}-linux-${arch}.${ext}
+
+appImage:
+  artifactName: Metrolist-${version}-linux-${arch}.${ext}
+
+deb:
+  artifactName: Metrolist-${version}-linux-${arch}.${ext}
