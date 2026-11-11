@@ -17,6 +17,23 @@ test.describe('search', () => {
     expect(await app.hash()).toBe('#/search?q=coldplay%20yellow');
   });
 
+  test('result rows request the small cover variant, Now Playing the large one', async ({ app, page }) => {
+    const images: string[] = [];
+    page.on('request', (r) => {
+      if (r.resourceType() === 'image' && r.url().includes('ytimg.com')) images.push(r.url());
+    });
+    await app.open();
+    await app.goTo('Search');
+    images.length = 0; // Home's shelf cards (large) are not under test
+    await app.search('coldplay yellow');
+    await expect(app.resultRows()).toHaveCount(12);
+    await expect.poll(() => images.some((u) => u.endsWith('/mqdefault.jpg'))).toBe(true);
+    expect(images.filter((u) => u.includes('/hqdefault.jpg') && u.includes('sqp='))).toHaveLength(0);
+    await app.resultRows().first().click();
+    await app.openNowPlaying();
+    await expect.poll(() => images.some((u) => u.includes('/hqdefault.jpg?sqp=fixture&rs=fixture'))).toBe(true);
+  });
+
   test('loading, error with Retry and "no songs found" states are honest (never unrelated songs)', async ({ app, api }) => {
     let mode: 'fail' | 'empty' = 'fail';
     api.search = (query) => (query === 'top hits' ? { body: { tracks: [] } } : mode === 'fail' ? { fail: true } : { body: { tracks: [] } });
