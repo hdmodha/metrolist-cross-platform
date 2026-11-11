@@ -1,0 +1,63 @@
+# Desktop packaging (electron-builder 26). Build with `npm run desktop:dist` (installers for this OS) or
+# `npm run desktop:pack` (unpacked app only). CI: .github/workflows/release-native-builds.yml.
+appId: com.metrolist.music
+productName: Metrolist
+copyright: Copyright © Metrolist contributors
+
+directories:
+  output: release
+  buildResources: build # build/icon.png (1024 x 1024) → .icns / .ico, installer and exe icons
+
+# Everything the app runs is bundled into dist/ (frontend) and dist-electron/main.cjs (main process with
+# the server), so no node_modules, sources or source maps are packaged.
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  - "!**/*.map"
+asar: true
+npmRebuild: false
+nodeGypRebuild: false
+publish: null
+
+mac:
+  category: public.app-category.music
+  target:
+    - target: dmg
+      arch: [universal] # one app for Apple Silicon and Intel
+  darkModeSupport: true
+  # Signing. No `identity` here on purpose: a literal "-" would stop electron-builder from using a real
+  # certificate. With the CSC_LINK / CSC_KEY_PASSWORD secrets it finds the Developer ID certificate and
+  # signs with the default hardened runtime, then notarizes when APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+  # APPLE_TEAM_ID are set. Without a certificate, CI adds
+  #   -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.timestamp=none
+  # for an ad-hoc signature (an unsigned arm64 app is killed on Apple Silicon). See CLAUDE.md §4 (desktop packaging).
+
+dmg:
+  artifactName: Metrolist-${version}-mac-universal.${ext}
+  writeUpdateInfo: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  artifactName: Metrolist-${version}-win-x64-setup.${ext}
+  # Per-user install into %LOCALAPPDATA%\Programs\Metrolist: no administrator rights
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Metrolist
+  uninstallDisplayName: Metrolist
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+
+# Linux is not shipped; `--linux dir` only proves packaging in CI-less environments.
+linux:
+  target: dir
+  category: Audio
+  executableName: metrolist

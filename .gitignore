@@ -1,5 +1,7 @@
 node_modules/
-build/
+# electron-builder resources: only the source icon is tracked
+build/*
+!build/icon.png
 dist/
 coverage/
 .DS_Store
@@ -14,3 +16,8 @@ public/assets/aistudio/
 test-results/
 playwright-report/
 blob-report/
+dist-server/
+dist-electron/
+release/
+test-results-electron/
+playwright-report-electron/

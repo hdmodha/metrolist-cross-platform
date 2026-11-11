@@ -24,9 +24,19 @@ This file provides essential architectural context, commands, data flows, known 
   npx playwright test --project=phone    # one device class
   ```
   Every external request is routed to fixtures in `e2e/fixtures/` (fake YouTube IFrame API, API answers, images); an unrouted external request fails the test.
-- **Production Frontend Build (`dist/`)**:
+- **Production Build (`dist/` frontend + `dist-server/server.mjs` bundled server)**:
   ```bash
   npm run build
+  npm start                              # node dist-server/server.mjs (always production; PORT, RATE_LIMIT_PER_MINUTE)
+  ```
+- **Desktop app (Electron)**:
+  ```bash
+  npm run desktop:dev                    # Electron against the source (Vite middleware in the main process)
+  npm run build && npm run build:electron && npx electron .   # the production build in Electron
+  METROLIST_SMOKE_TEST=1 npx electron .  # start-up self-check: PASS / FAIL line, exit 0 / 1, 45 s timeout
+  npm run test:electron                  # Playwright `_electron` suite (Linux: `xvfb-run -a npm run test:electron`)
+  npm run desktop:pack                   # electron-builder, unpacked app for this OS (release/, git-ignored)
+  npm run desktop:dist                   # installers for this OS: universal .dmg (macOS), NSIS setup .exe (Windows)
   ```
 - **Verify Dependency Security (Zero Vulnerabilities Required)**:
   ```bash
@@ -37,12 +47,25 @@ This file provides essential architectural context, commands, data flows, known 
 
 ## 2. High-Level Architecture & File Map
 
-The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTube Music client), built with **React 19 + TypeScript + Tailwind CSS v4 + Vite** on the frontend and an **Express (`server.ts`)** InnerTube proxy backend. Every song is a YouTube Music song (there are no built-in songs); a fresh install starts with an empty library and nothing loaded.
+The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTube Music client), built with **React 19 + TypeScript + Tailwind CSS v4 + Vite** on the frontend and an **Express** InnerTube proxy backend (`src/server/createServer.ts`, started by the `server.ts` CLI or inside the Electron desktop app). Every song is a YouTube Music song (there are no built-in songs); a fresh install starts with an empty library and nothing loaded.
 
 ```text
-├── server.ts                              # Express backend: InnerTube search, RDAMVM recommendations
+├── server.ts                              # CLI entry: env (PORT, NODE_ENV, RATE_LIMIT_PER_MINUTE) → startMetrolistServer (web mode); Vite only in dev (dynamic import)
+├── scripts/build-node.mjs                 # esbuild: server.ts → dist-server/server.mjs (ESM), electron/main.ts → dist-electron/main.cjs (CJS); all deps bundled, vite external
+├── electron/                              # Desktop app main process (TypeScript; type-checked by `npm run lint`)
+│   ├── main.ts                            # Lifecycle: switches, single-instance lock, server on 127.0.0.1:47823, menus, mac hide-on-close, smoke test
+│   ├── mainWindow.ts / security.ts / menu.ts / smokeRunner.ts / jsonFile.ts
+│   └── policies/                          # Pure, test-first: navigation (allow / external / deny), permissions, ports (fixed + fallback), windowState (clamp), smokeTest
+├── e2e-electron/                          # Playwright `_electron` suite (playwright.electron.config.ts; NOT part of test:e2e)
+├── electron-builder.yml                   # Packaging: files (dist/, dist-electron/, package.json only), universal dmg, NSIS per-user, Linux dir
+├── build/icon.png                         # 1024 px app icon (electron-builder derives .icns / .ico; the rest of build/ is ignored)
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
 ├── src/
+│   ├── server/
+│   │   ├── createServer.ts                # Express app factory: mode 'web' | 'desktop', routes, rate limiter, InnerTube transport, SPA fallback
+│   │   ├── hostAllowlist.ts               # Desktop DNS-rebinding check: Host must be 127.0.0.1:<port> / localhost:<port>
+│   │   ├── serverConfig.ts                # PORT / RATE_LIMIT_PER_MINUTE parsing, dist/ location (source or bundled)
+│   │   └── devFrontend.ts                 # Vite dev middlewares (dynamic import; npm run dev, desktop:dev)
 │   ├── App.tsx                            # Shell: usePlayer() + useRoute() + useNowPlaying() in, chrome + current page out
 │   ├── app/
 │   │   ├── router.ts                      # Hash router: pure parseRoute / formatRoute + navigate() + history flags
@@ -117,7 +140,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 
 4. **YouTube Music Recommendations / Radio (`GET /api/innertube/recommendations?videoId=...`)**:
    - Whenever the active track id (or autoplay) changes, `usePlayer.ts` calls `fetchRecommendations()` and dispatches `recommendationsLoaded` / `recommendationsFailed` (fallback shelf). Home shows them as "Because you listened to <title>".
-   - `server.ts` calls `https://music.youtube.com/youtubei/v1/next` with playlist `RDAMVM${seedVideoId}`.
+   - The server (`src/server/createServer.ts`) calls `https://music.youtube.com/youtubei/v1/next` with playlist `RDAMVM${seedVideoId}`.
    - `parseInnerTubeWatchNextPage` extracts recommended tracks (live streams and >20 min mixes are dropped) and the radio continuation token (`playlistPanelRenderer.continuations[0].nextRadioContinuationData.continuation`); the route answers `{ tracks, seedVideoId, continuation }`. With "Autoplay similar songs" on (`autoplayRadio`), the reducer appends them (`mergeRadioIntoQueue`) **only when 5 or fewer songs are left** — it never replaces the queue, so hand-queued songs survive.
    - **Radio continuation**: the same route with `&continuation=<token>` (≤ 1024 chars of `[A-Za-z0-9_\-%=.]`, checked by the linear `sanitizeRadioContinuation`; the seed must be a valid video id) re-sends the WatchNext body plus the URL-decoded token. That answer repeats the first page under `contents`, so only `continuationContents.playlistPanelContinuation` is parsed. Client: `fetchRadioContinuation()` in `apiClient.ts` (backend and native-shell paths). `usePlayer.ts` requests the next page whenever `selectRadioContinuationRequest(state)` is non-null (`radioPageRequested` → `radioPageLoaded` / `radioPageFailed`, retried with back-off via `radioRetry`); an aborted request must still dispatch `radioPageFailed`.
 
@@ -141,6 +164,15 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
    - v1 (`metrolist.player.v1`) is migrated once on load: library tracks with `liked` → `likedIds`, `cachedOffline` → `downloadedIds`, the library order → Recently played; the old demo songs (`trk-…`), their flags, demo queue entries and the EQ gains are dropped; an active demo song leaves nothing active. v1 is removed only after v2 was written.
    - Launch restores the last queue, song and position, always paused (`loadPlayerState` → `fromPersistedState` → `restore`). Saves are debounced on state change; the position is saved at most every 5 s while playing, on pause, on `visibilitychange` → hidden and on `pagehide`. Recent searches live in `metrolist.recentSearches.v1`.
 
+9. **Desktop app (`electron/`, Electron 45)**:
+   - The main process starts the server in **desktop mode** (`startMetrolistServer({ mode: 'desktop' })`) and loads `http://127.0.0.1:<port>/`. **The port is fixed (47823, `policies/ports.ts`)**: localStorage — the whole library above — is per origin, and the origin includes the port, so a random port would lose the listener's data on every launch. Busy ports fall back to 47824–47827, then any port, with a one-time notice ("saved music not available in this session"). It is http, not a custom `app://` scheme, because the YouTube embed needs a normal http origin / referrer.
+   - Desktop mode: binds 127.0.0.1 only (anything else throws), no CORS headers, `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (403 otherwise; DNS rebinding).
+   - Window security (`security.ts`): `contextIsolation`, `sandbox`, no `nodeIntegration`, no preload, no `<webview>`, DevTools only unpackaged. `will-navigate` / `setWindowOpenHandler` follow `decideNavigation`: same origin stays, other http(s) → `shell.openExternal`, everything else denied. Iframes (the YouTube player) are not window navigations. Permissions: only `fullscreen` and `clipboard-sanitized-write`; devices denied.
+   - Behaviour: single-instance lock (a second launch shows the window); bounds / maximised saved in `userData/window-state.json`, clamped to a visible display (`policies/windowState.ts`); min 360×560; background `#09090B`, window title fixed to "Metrolist"; `backgroundThrottling: false` + `disable-renderer-backgrounding` / `disable-background-timer-throttling`; `autoplay-policy=no-user-gesture-required`. macOS: app / Edit (needed for Cmd+C / Cmd+V) / View / Window menus, closing hides (music keeps playing), Dock click shows, Cmd+Q quits. Windows / Linux: no menu, closing quits. Media keys come from the page's MediaSession code: never disable Chromium's `HardwareMediaKeyHandling`.
+   - Bundling: `dist-electron/main.cjs` inlines everything except `electron` (and `vite`, only loaded by `--metrolist-dev`), so `app.asar` holds only `dist/`, `dist-electron/main.cjs` and a trimmed `package.json` — no `node_modules`, `src/` or source maps (check with `npx @electron/asar list release/*/resources/app.asar`). Serving `dist/` from inside `app.asar` works (Electron's fs patch).
+   - **Smoke test**: `METROLIST_SMOKE_TEST=1` uses a throw-away `userData`, waits for the page, checks `<main>` + `nav[aria-label="Main"]` + a title naming Metrolist, requests `/manifest.webmanifest`, prints `METROLIST SMOKE TEST: PASS|FAIL (…)` and exits 0 / 1 (45 s timeout). No YouTube needed.
+   - **Tests**: `npm run test:electron` launches the app with `--user-data-dir` per test, `--host-resolver-rules` (no external DNS) and a dead proxy for the in-process server (`NODE_USE_ENV_PROXY`), installs the web suite's routes on the page, then reloads. Page-level routes are required: context routes do not reach Electron's first window. On Linux it adds `--no-sandbox` (root containers, Ubuntu 24.04 AppArmor).
+
 ---
 
 ## 4. Priority Bug Areas & Architectural Caveats to Investigate
@@ -159,7 +191,14 @@ When debugging or improving the application, prioritize checking these areas:
    - Capacitor iOS serves the app from `capacitor://localhost`; YouTube embeds may reject that origin (untested).
    - Direct audio stream extraction (`<audio>` element) would enable true background playback and real offline downloads; until then "Downloads" is a list only.
 
-3. **Full-Length Duration Preservation**:
+3. **Desktop packaging and signing (`electron-builder.yml`, release workflow job `build-desktop-installers`)**:
+   - macOS: one universal `.dmg` (`Metrolist-<v>-mac-universal.dmg`). electron-builder packs x64 and arm64 unsigned, merges them with `@electron/universal`, then signs the merged app once (`macPackager.doUniversalPack` → `doSignAfterPack`).
+   - **Signing is ad-hoc** (no Apple Developer account); an unsigned arm64 app is killed on Apple Silicon. CI passes `-c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.timestamp=none` when the `CSC_LINK` secret is empty: `MacTargetHelper.findSigningIdentity` turns identity `"-"` into an ad-hoc `Identity("-")` and `@electron/osx-sign` runs `codesign --sign - --force` on every binary, deepest first. Hardened runtime stays off (library validation would reject ad-hoc-signed frameworks); `--timestamp=none` because ad-hoc signatures are not timestamped. Never put `identity: "-"` in the yml: it would stop a real certificate from being used.
+   - With the secrets `CSC_LINK` (base64 `.p12` Developer ID Application) + `CSC_KEY_PASSWORD`, the certificate is found automatically and the default hardened runtime is used; with `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` it is also notarized (`MacTargetHelper.getNotarizeOptions`). Users then no longer need "Open Anyway".
+   - CI proves the mac build with `codesign --verify --deep --strict`, `codesign -dv`, `lipo -archs` (arm64 + x86_64) and the packaged smoke test; Windows with the packaged `win-unpacked/Metrolist.exe` smoke test (the verdict is written to `METROLIST_SMOKE_TEST_REPORT`; the exit code decides).
+   - Windows: NSIS, x64, one-click per-user install in `%LOCALAPPDATA%\Programs\Metrolist` (no admin), Start-menu + desktop shortcuts, uninstaller, keeps app data on uninstall. Not code-signed (SmartScreen "More info → Run anyway"); `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` secrets would sign it. Installer, uninstaller and exe icons come from `build/icon.png`.
+
+4. **Full-Length Duration Preservation**:
    - Never overwrite a track's `durationMs` with a 30-second preview duration (`PREVIEW_DURATION_MS`). Keep the full duration parsed from InnerTube (`ytTrack.durationMs`) or reported by `YouTubeStreamBridge.onTimeUpdateMs`.
 
 ---
@@ -168,14 +207,21 @@ When debugging or improving the application, prioritize checking these areas:
 
 GitHub **Dependabot** and **CodeQL** are active on this repository. Preserve these invariants when editing code:
 
-0. **Express 5 routing (`server.ts`)**:
-   - `express` resolves to 5.x. A bare `'*'` route pattern throws at startup there, so the SPA fallback is a path-less `app.use(rateLimiterMiddleware, ...)`. Always smoke-test `NODE_ENV=production npx tsx server.ts` after touching routes.
-1. **CodeQL `js/missing-rate-limiting` (`server.ts`)**:
-   - Always keep `express-rate-limit` (`rateLimiterMiddleware`) mounted both globally (`app.use(rateLimiterMiddleware)`) and explicitly on any route calling `res.sendFile(...)`. Do not replace `express-rate-limit` with a custom `Map` rate limiter, as CodeQL only recognizes standard library middleware models. The per-minute limit defaults to 240 and may only be raised through `RATE_LIMIT_PER_MINUTE` (the e2e web server sets it, because the whole suite comes from one IP); never remove the middleware.
-2. **CodeQL `js/request-forgery` / SSRF (`server.ts`)**:
+0. **Express 5 routing (`src/server/createServer.ts`)**:
+   - `express` resolves to 5.x. A bare `'*'` route pattern throws at startup there, so the SPA fallback is a path-less `app.use(rateLimiterMiddleware, ...)`. Always smoke-test `NODE_ENV=production npx tsx server.ts` and `npm run build && npm start` after touching routes.
+   - The server code must not use `import.meta` (it is also bundled to CJS for Electron); `server.ts` is the only place that does.
+1. **CodeQL `js/missing-rate-limiting` (`src/server/createServer.ts`)**:
+   - The rate limiter lives in the factory, so every mode (web, desktop, dev) gets it. Always keep `express-rate-limit` (`rateLimiterMiddleware`) mounted both globally (`app.use(rateLimiterMiddleware)`) and explicitly on any route calling `res.sendFile(...)`. Do not replace `express-rate-limit` with a custom `Map` rate limiter, as CodeQL only recognizes standard library middleware models. The per-minute limit defaults to 240 and may only be raised through `RATE_LIMIT_PER_MINUTE` (the e2e web server sets it, because the whole suite comes from one IP); never remove the middleware.
+2. **CodeQL `js/request-forgery` / SSRF (`src/server/createServer.ts`, `innerTubeTransport`)**:
    - When making outbound `fetch()` calls with query parameters derived from `req.query`, always construct a `new URL(...)` object, populate parameters with `.searchParams.set(...)`, and explicitly verify `url.origin === 'https://...'` before calling `fetch(url)`.
 3. **CodeQL `js/polynomial-redos` (`src/utils/metrolistCore.ts`)**:
    - Never use regexes with nested quantifiers or ambiguous `.*?` on user-controlled strings (such as `/\[.*?\]|\(.*?token.*?\)/gi` or `/\/+$/`). Use linear $O(N)$ character loops (`stripAllBracketedSegmentsLinear`, `sanitizeApiQueryText`).
-4. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
+4. **`minimatch` override for electron-builder (`package.json` `overrides`)**:
+   - `app-builder-lib` (`minimatch@^10.2.5`) and `@electron/universal` (`minimatch@^9.0.3`) are forced to `minimatch@11.0.1`, and its dependency `@isaacs/nonrecursive-glob-match` to `1.0.1`, because of GHSA-g3hv-75wg-m249 (minimatch DoS, fixed only in 11.0.1+). It is build-time only: none of it ships in the app. The range-scoped keys leave the unaffected minimatch 3.x / 5.x copies (`@electron/asar`, `glob`, `dir-compare`, `filelist`) alone.
+   - **Remove these three entries once electron-builder depends on minimatch >= 11.0.1 by itself**, then check `npm ls minimatch` and `npm audit`.
+   - npm 10 ignores these scoped overrides when it resolves without a lockfile, so the mac / win release jobs install with `npx npm@11.21.1` and fail on `npm ls minimatch` if an override was not applied. Installs from the committed lockfile (npm 10 or 11) are correct.
+5. **Desktop server isolation (`src/server/createServer.ts`, `hostAllowlist.ts`)**:
+   - Desktop mode binds `127.0.0.1` only, sends no CORS headers and rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>`. Never relax these: the desktop server is reachable by every page the user visits. Keep the window settings in `electron/security.ts` (`contextIsolation`, `sandbox`, no `nodeIntegration`, navigation / window-open / permission policies).
+6. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
    - Keep `package-lock.json` committed at the root so GitHub Dependabot can audit exact dependency versions (`vite >= 6.4.6`, `esbuild >= 0.25.0`, `express >= 4.21.2`).
-   - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before `npm install --legacy-peer-deps` so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).
+   - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before the install (`npx -y npm@11.21.1 install --legacy-peer-deps`, see item 4) so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).

@@ -41,6 +41,12 @@ npm run lint
 
 # Verify production build
 npm run build
+
+# Production server smoke start (bundled server)
+PORT=3078 npm start
+
+# Desktop app tests (see section 3)
+npm run test:electron
 ```
 
 ### Writing code
@@ -52,6 +58,43 @@ npm run build
 ---
 
 ## 3. Building Native Packages Locally
+
+### Desktop app (Electron)
+The main process lives in `electron/` (TypeScript, bundled by esbuild to `dist-electron/main.cjs`); it starts the server from `src/server/createServer.ts` in desktop mode and opens `http://127.0.0.1:47823/`.
+
+```bash
+# Run against the source (Vite serves the frontend inside the app)
+npm run desktop:dev
+
+# Run the production build in Electron
+npm run build && npm run build:electron
+npx electron .
+
+# Start-up self-check (prints a PASS / FAIL line, exits 0 / 1)
+METROLIST_SMOKE_TEST=1 npx electron .
+
+# Desktop end-to-end tests (Playwright's Electron support; builds first)
+npm run test:electron               # macOS / Windows
+xvfb-run -a npm run test:electron   # Linux (virtual display)
+```
+
+On Linux, Electron refuses to start as root without `--no-sandbox` (the test helper adds it on Linux only).
+
+Packaging uses electron-builder (`electron-builder.yml`, icons from `build/icon.png`; output in `release/`, git-ignored):
+
+```bash
+npm run desktop:pack   # unpacked app for this OS (release/mac-universal/Metrolist.app, release/win-unpacked/, release/linux-unpacked/)
+npm run desktop:dist   # installers for this OS: universal .dmg on macOS, NSIS setup .exe on Windows
+                       # (Linux is not shipped; there it only builds the unpacked app)
+
+# Check the packaged app starts
+METROLIST_SMOKE_TEST=1 release/mac-universal/Metrolist.app/Contents/MacOS/Metrolist      # macOS
+METROLIST_SMOKE_TEST=1 xvfb-run -a release/linux-unpacked/metrolist --no-sandbox         # Linux
+```
+
+On a Mac without a Developer ID certificate, sign ad-hoc like CI does, or Apple Silicon kills the app:
+`npx electron-builder --mac --universal --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.timestamp=none`.
+The release workflow (`.github/workflows/release-native-builds.yml`) builds both installers, smoke-tests the packaged apps on real macOS and Windows runners and attaches the installers to the release. Run it manually with **publish** unticked to test-build a branch without creating a release.
 
 ### Android (`.apk`) & iOS (`.ipa` / Xcode) via Capacitor
 ```bash

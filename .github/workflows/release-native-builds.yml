@@ -10,6 +10,11 @@ on:
         description: "Release version tag (e.g. v1.0.0)"
         required: true
         default: "v1.0.0"
+      publish:
+        description: "Publish a GitHub Release (untick to only build and upload the artifacts, e.g. to test-build a branch)"
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: write
@@ -39,9 +44,27 @@ jobs:
       - name: Build production web bundle
         run: npm run build
 
+      # `npm run build` produced dist/ (frontend) and dist-server/server.mjs (the server with every
+      # dependency bundled), so the archive runs with Node.js alone: no npm install needed.
       - name: Archive Portable Web & Full-Stack Server Release
         run: |
-          7z a -tzip metrolist-portable-web-and-server.zip dist server.ts package.json Dockerfile README.md
+          7z a -tzip metrolist-portable-web-and-server.zip dist dist-server package.json README.md
+
+      - name: Verify the portable archive starts from a clean directory
+        run: |
+          tmp="$(mktemp -d)"
+          unzip -q metrolist-portable-web-and-server.zip -d "$tmp"
+          test ! -e "$tmp/node_modules"
+          (cd "$tmp" && PORT=3080 exec node dist-server/server.mjs > server.log 2>&1) &
+          server_pid=$!
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:3080/manifest.webmanifest && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://localhost:3080/
+          curl -sf -o /dev/null http://localhost:3080/manifest.webmanifest
+          cat "$tmp/server.log"
+          kill "$server_pid" || true
 
       - name: Upload Web & Server Artifact
         uses: actions/upload-artifact@v4
@@ -49,8 +72,9 @@ jobs:
           name: metrolist-web-release
           path: metrolist-portable-web-and-server.zip
 
-  # 2. Build Native Desktop Packages (macOS & Windows)
-  build-desktop-native:
+  # 2. Native desktop apps (Electron + electron-builder): a universal macOS .dmg and a Windows NSIS
+  #    installer. Each job smoke-tests the packaged app (METROLIST_SMOKE_TEST=1) before uploading it.
+  build-desktop-installers:
     needs: verify-and-bundle-web
     strategy:
       fail-fast: false
@@ -58,9 +82,15 @@ jobs:
         include:
           - os: macos-latest
             platform_name: macos-universal
+            artifact_glob: release/*.dmg
           - os: windows-latest
             platform_name: windows-x64
+            artifact_glob: release/*-setup.exe
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -70,24 +100,108 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies & build frontend
-        shell: bash
+      # CLAUDE.md §5 (lockfile handling): without the lockfile npm fetches this OS's native optional binaries
+      # (@rollup/rollup-*, @tailwindcss/oxide-*). npm 11 is used for this install because npm 10
+      # ignores the scoped minimatch overrides in package.json when it resolves without a lockfile;
+      # `npm ls minimatch` fails the job if an override was not applied.
+      - name: Install dependencies
         run: |
           rm -f package-lock.json
-          npm install --legacy-peer-deps
-          npm run build
+          npx -y npm@11.21.1 install --legacy-peer-deps
+          npm ls minimatch
 
-      - name: Package Native Desktop Standalone Archive
-        shell: bash
+      - name: Set the app version from the release tag (no commit)
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          mkdir -p release-desktop
-          7z a -tzip "release-desktop/metrolist-${{ matrix.platform_name }}-standalone.zip" dist server.ts package.json README.md
+          version="${RELEASE_TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag '$RELEASE_TAG' is not vX.Y.Z" >&2
+            exit 1
+          fi
+          npm version "$version" --no-git-tag-version --allow-same-version
+          echo "Building Metrolist $version"
 
-      - name: Upload Desktop Artifact (${{ matrix.platform_name }})
+      - name: Build frontend, server and main process
+        run: |
+          npm run build
+          npm run build:electron
+
+      # Real signing is picked up automatically once these repository secrets exist:
+      #   CSC_LINK (base64 .p12 Developer ID Application certificate), CSC_KEY_PASSWORD,
+      #   and for notarization APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID.
+      # Without a certificate the app is ad-hoc signed (identity "-"), without hardened runtime:
+      # an unsigned arm64 app is killed on Apple Silicon. Ad-hoc apps are never notarized.
+      - name: Package macOS app (universal .dmg)
+        if: runner.os == 'macOS'
+        env:
+          SECRET_CSC_LINK: ${{ secrets.CSC_LINK }}
+          SECRET_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          signing=()
+          if [ -n "$SECRET_CSC_LINK" ]; then
+            echo "Signing with the Developer ID certificate from CSC_LINK"
+            export CSC_LINK="$SECRET_CSC_LINK" CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
+            if [ -n "$SECRET_APPLE_ID" ]; then
+              export APPLE_ID="$SECRET_APPLE_ID" APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
+            fi
+          else
+            echo "No CSC_LINK secret: ad-hoc signing"
+            signing=(-c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.timestamp=none)
+          fi
+          npx electron-builder --mac --universal --publish never "${signing[@]}"
+
+      - name: Verify the macOS signature and architectures
+        if: runner.os == 'macOS'
+        run: |
+          app="release/mac-universal/Metrolist.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1
+          lipo -archs "$app/Contents/MacOS/Metrolist"
+          lipo -archs "$app/Contents/MacOS/Metrolist" | grep -q arm64
+          lipo -archs "$app/Contents/MacOS/Metrolist" | grep -q x86_64
+
+      - name: Smoke-test the packaged macOS app
+        if: runner.os == 'macOS'
+        timeout-minutes: 3
+        run: METROLIST_SMOKE_TEST=1 release/mac-universal/Metrolist.app/Contents/MacOS/Metrolist
+
+      - name: Package Windows installer (NSIS, x64)
+        if: runner.os == 'Windows'
+        env:
+          SECRET_WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          SECRET_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -n "$SECRET_WIN_CSC_LINK" ]; then
+            export WIN_CSC_LINK="$SECRET_WIN_CSC_LINK" WIN_CSC_KEY_PASSWORD="$SECRET_WIN_CSC_KEY_PASSWORD"
+          fi
+          npx electron-builder --win --x64 --publish never
+
+      # A GUI-subsystem exe's stdout may not reach the log, so the verdict is also written to a file;
+      # the exit code alone decides.
+      - name: Smoke-test the packaged Windows app
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'metrolist-smoke.txt'
+          $env:METROLIST_SMOKE_TEST = '1'
+          $env:METROLIST_SMOKE_TEST_REPORT = $report
+          $proc = Start-Process -FilePath 'release\win-unpacked\Metrolist.exe' -Wait -PassThru -NoNewWindow
+          if (Test-Path $report) { Get-Content $report } else { Write-Host 'METROLIST SMOKE TEST: no report written' }
+          $code = $proc.ExitCode
+          Write-Host "Exit code: $code"
+          if ($null -eq $code -or $code -ne 0) { exit 1 }
+
+      - name: Upload desktop installer (${{ matrix.platform_name }})
         uses: actions/upload-artifact@v4
         with:
           name: metrolist-desktop-${{ matrix.platform_name }}
-          path: release-desktop/*
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
 
   # 3. Build Android (.apk) & iOS Project Bundle via Capacitor
   build-mobile-bundles:
@@ -143,8 +257,10 @@ jobs:
           path: release-mobile/*
 
   # 4. Publish All Platform Builds to GitHub Releases
+  # Skipped for a manual run with "publish" unticked (artifacts are still uploaded to the run).
   publish-github-release:
-    needs: [verify-and-bundle-web, build-desktop-native, build-mobile-bundles]
+    needs: [verify-and-bundle-web, build-desktop-installers, build-mobile-bundles]
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     steps:
       - name: Download all platform build artifacts
