@@ -9,6 +9,7 @@
  */
 import React from 'react';
 import { STATIC_YTM_FALLBACK } from '../data/fallbackTracks';
+import { connectBackgroundPlayback, getAndroidBackgroundPlayback } from '../native/backgroundPlayback';
 import {
   checkEmbeddable,
   fetchRadioContinuation,
@@ -646,6 +647,16 @@ export function usePlayer() {
       }
     });
   }, [clock, durationMs, state.isPlaying, store]);
+
+  /* --------------------------------- Android background play --------------------------------- */
+
+  // The packaged Android app only (a no-op on the web, desktop and iOS): the local Capacitor plugin
+  // keeps playing in the background and sends the notification / headset commands back
+  React.useEffect(() => {
+    const plugin = getAndroidBackgroundPlayback();
+    if (!plugin) return;
+    return connectBackgroundPlayback({ plugin, store, clock, actions });
+  }, [actions, clock, store]);
 
   /* --------------------------------------- keyboard ------------------------------------------ */
 
