@@ -27,6 +27,7 @@ export const SongCard = React.memo(function SongCard({ track, isCurrent, isPlayi
         <span className="relative block">
           <Artwork
             src={track.coverUrl}
+            size="large"
             className={`block w-full aspect-square rounded-md shadow-lg shadow-black/40 ${unavailableReason ? 'opacity-50' : ''}`}
           />
           <span

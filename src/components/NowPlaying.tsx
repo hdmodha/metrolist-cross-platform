@@ -227,7 +227,7 @@ export const NowPlaying = React.memo(function NowPlaying({
           <div className="flex-1 min-h-0 flex flex-col short:flex-row short:items-center gap-6 short:gap-6 py-4 short:py-2">
             <div className="art-box flex-1 min-h-0 min-w-0 short:h-full flex items-center justify-center">
               <div className="art-square">
-                <Artwork src={track.coverUrl} eager className="w-full h-full rounded-lg shadow-2xl shadow-black/60" />
+                <Artwork src={track.coverUrl} size="large" eager className="w-full h-full rounded-lg shadow-2xl shadow-black/60" />
               </div>
             </div>
 
