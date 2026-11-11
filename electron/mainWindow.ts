@@ -1,9 +1,11 @@
 /**
  * The one Metrolist window: dark from the first frame, title "Metrolist", minimum 360 x 560, size /
  * position / maximised state saved in `userData/window-state.json` and clamped to a visible display.
+ * Minimised or hidden, it tells the page to save the player (`src/shared/appBackgroundSignal.ts`).
  */
 import { BrowserWindow, screen } from 'electron';
 import path from 'node:path';
+import { appBackgroundScript } from '../src/shared/appBackgroundSignal';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 import { BACKGROUND_COLOR, secureWebPreferences } from './security';
 import { MIN_SIZE, parseWindowState, restoreWindowState, type WindowState } from './policies/windowState';
@@ -50,6 +52,15 @@ export function createMainWindow(userDataDir: string): BrowserWindow {
   win.on('maximize', saveSoon);
   win.on('unmaximize', saveSoon);
   win.on('close', save);
+
+  // Music keeps playing while minimised / hidden (the page stays "visible": backgroundThrottling is
+  // off), so the page gets no visibilitychange: tell it to save now
+  const signalBackground = () => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+    win.webContents.executeJavaScript(appBackgroundScript(), false).catch(() => undefined);
+  };
+  win.on('minimize', signalBackground);
+  win.on('hide', signalBackground);
 
   return win;
 }

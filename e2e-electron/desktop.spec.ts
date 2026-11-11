@@ -233,3 +233,65 @@ test('ad and tracking requests of the YouTube player are cancelled; playback req
   expect(routed).not.toContain(AD);
   await close(app);
 });
+
+test('minimised or hidden, the window keeps playing with the page visible, and the page saves', async () => {
+  const app = await launch(newProfile());
+  const player = new MetrolistApp(app.page);
+  await player.searchAndPlayFirst('daft punk');
+  await app.page.evaluate(() => {
+    const w = window as unknown as { __visibilityEvents: string[] };
+    w.__visibilityEvents = [];
+    document.addEventListener('visibilitychange', () => w.__visibilityEvents.push(document.visibilityState));
+  });
+  const pageState = () =>
+    app.page.evaluate(() => ({
+      visibility: document.visibilityState,
+      hidden: document.hidden,
+      events: (window as unknown as { __visibilityEvents: string[] }).__visibilityEvents,
+    }));
+  const savedPosition = () =>
+    app.page.evaluate(() => {
+      const raw = localStorage.getItem('metrolist.player.v2');
+      return raw ? Number((JSON.parse(raw) as { positionMs?: number }).positionMs ?? 0) : null;
+    });
+  // Xvfb has no window manager, so minimize() changes nothing there and fires no 'minimize' event:
+  // the event is then emitted by hand (the app's handler is what is under test; hide() is real)
+  const windowDo = (action: 'minimize' | 'restore' | 'hide' | 'show') =>
+    app.electronApp.evaluate(async ({ BrowserWindow }, how) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      let fired = false;
+      const onEvent = () => {
+        fired = true;
+      };
+      if (how === 'minimize') win.once('minimize', onEvent);
+      else win.once('hide', onEvent);
+      win[how]();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (how === 'minimize' && !fired) win.emit('minimize');
+      if (how === 'minimize') win.removeListener('minimize', onEvent);
+      else win.removeListener('hide', onEvent);
+      return { visible: win.isVisible(), minimized: win.isMinimized(), fired };
+    }, action);
+
+  for (const [away, back] of [
+    ['minimize', 'restore'],
+    ['hide', 'show'],
+  ] as const) {
+    // The main process tells the page at once (no 5 s wait for the next periodic save)
+    await app.page.evaluate(() => localStorage.removeItem('metrolist.player.v2'));
+    const state = await windowDo(away);
+    if (away === 'hide') expect(state).toMatchObject({ visible: false, fired: true });
+    await expect.poll(savedPosition, { timeout: 2000 }).not.toBeNull();
+    await app.page.goto(`${APP_URL}#/debug`).catch(() => undefined);
+    await expect(app.page.getByRole('list', { name: 'Debug log entries' })).toContainText('Desktop window minimised or hidden: saved');
+    await app.page.goBack();
+
+    // Still playing, still "visible" (backgroundThrottling: false), and saving as it plays
+    const before = (await savedPosition()) ?? 0;
+    await expect.poll(() => player.ytState()).toBe(1);
+    await expect.poll(savedPosition, { timeout: 12_000 }).toBeGreaterThan(before + 2000);
+    expect(await pageState()).toEqual({ visibility: 'visible', hidden: false, events: [] });
+    await windowDo(back);
+  }
+  await close(app);
+});

@@ -17,6 +17,7 @@ import {
   peekEmbeddability,
   searchTracks,
 } from '../utils/apiClient';
+import { APP_BACKGROUND_EVENT } from '../shared/appBackgroundSignal';
 import { connectPlayerDebugLog, debugLog } from '../utils/debugLog';
 import {
   fromPersistedState,
@@ -572,11 +573,18 @@ export function usePlayer() {
       debugLog.add('page', 'Page hide');
       saveNow();
     };
+    // The desktop app's window was minimised / hidden (it keeps playing, the page stays visible)
+    const onAppBackground = () => {
+      debugLog.add('page', 'Desktop window minimised or hidden: saved');
+      saveNow();
+    };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pagehide', onPageHide);
+    window.addEventListener(APP_BACKGROUND_EVENT, onAppBackground);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener(APP_BACKGROUND_EVENT, onAppBackground);
     };
   }, [saveNow]);
 
