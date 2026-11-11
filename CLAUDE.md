@@ -35,6 +35,8 @@ This file provides essential architectural context, commands, data flows, known 
   npm run build && npm run build:electron && npx electron .   # the production build in Electron
   METROLIST_SMOKE_TEST=1 npx electron .  # start-up self-check: PASS / FAIL line, exit 0 / 1, 45 s timeout
   npm run test:electron                  # Playwright `_electron` suite (Linux: `xvfb-run -a npm run test:electron`)
+  npm run desktop:pack                   # electron-builder, unpacked app for this OS (release/, git-ignored)
+  npm run desktop:dist                   # installers for this OS: universal .dmg (macOS), NSIS setup .exe (Windows)
   ```
 - **Verify Dependency Security (Zero Vulnerabilities Required)**:
   ```bash
@@ -55,6 +57,8 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   ├── mainWindow.ts / security.ts / menu.ts / smokeRunner.ts / jsonFile.ts
 │   └── policies/                          # Pure, test-first: navigation (allow / external / deny), permissions, ports (fixed + fallback), windowState (clamp), smokeTest
 ├── e2e-electron/                          # Playwright `_electron` suite (playwright.electron.config.ts; NOT part of test:e2e)
+├── electron-builder.yml                   # Packaging: files (dist/, dist-electron/, package.json only), universal dmg, NSIS per-user, Linux dir
+├── build/icon.png                         # 1024 px app icon (electron-builder derives .icns / .ico; the rest of build/ is ignored)
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
 ├── src/
 │   ├── server/
@@ -165,7 +169,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
    - Desktop mode: binds 127.0.0.1 only (anything else throws), no CORS headers, `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (403 otherwise; DNS rebinding).
    - Window security (`security.ts`): `contextIsolation`, `sandbox`, no `nodeIntegration`, no preload, no `<webview>`, DevTools only unpackaged. `will-navigate` / `setWindowOpenHandler` follow `decideNavigation`: same origin stays, other http(s) → `shell.openExternal`, everything else denied. Iframes (the YouTube player) are not window navigations. Permissions: only `fullscreen` and `clipboard-sanitized-write`; devices denied.
    - Behaviour: single-instance lock (a second launch shows the window); bounds / maximised saved in `userData/window-state.json`, clamped to a visible display (`policies/windowState.ts`); min 360×560; background `#09090B`, window title fixed to "Metrolist"; `backgroundThrottling: false` + `disable-renderer-backgrounding` / `disable-background-timer-throttling`; `autoplay-policy=no-user-gesture-required`. macOS: app / Edit (needed for Cmd+C / Cmd+V) / View / Window menus, closing hides (music keeps playing), Dock click shows, Cmd+Q quits. Windows / Linux: no menu, closing quits. Media keys come from the page's MediaSession code: never disable Chromium's `HardwareMediaKeyHandling`.
-   - Bundling: `dist-electron/main.cjs` inlines everything except `electron` (and `vite`, only loaded by `--metrolist-dev`), so a package needs only `dist/`, `dist-electron/`, `package.json` — no `node_modules`. Serving `dist/` from inside `app.asar` works (Electron's fs patch; verified with a hand-packed asar).
+   - Bundling: `dist-electron/main.cjs` inlines everything except `electron` (and `vite`, only loaded by `--metrolist-dev`), so `app.asar` holds only `dist/`, `dist-electron/main.cjs` and a trimmed `package.json` — no `node_modules`, `src/` or source maps (check with `npx @electron/asar list release/*/resources/app.asar`). Serving `dist/` from inside `app.asar` works (Electron's fs patch).
    - **Smoke test**: `METROLIST_SMOKE_TEST=1` uses a throw-away `userData`, waits for the page, checks `<main>` + `nav[aria-label="Main"]` + a title naming Metrolist, requests `/manifest.webmanifest`, prints `METROLIST SMOKE TEST: PASS|FAIL (…)` and exits 0 / 1 (45 s timeout). No YouTube needed.
    - **Tests**: `npm run test:electron` launches the app with `--user-data-dir` per test, `--host-resolver-rules` (no external DNS) and a dead proxy for the in-process server (`NODE_USE_ENV_PROXY`), installs the web suite's routes on the page, then reloads. Page-level routes are required: context routes do not reach Electron's first window. On Linux it adds `--no-sandbox` (root containers, Ubuntu 24.04 AppArmor).
 
@@ -187,8 +191,12 @@ When debugging or improving the application, prioritize checking these areas:
    - Capacitor iOS serves the app from `capacitor://localhost`; YouTube embeds may reject that origin (untested).
    - Direct audio stream extraction (`<audio>` element) would enable true background playback and real offline downloads; until then "Downloads" is a list only.
 
-3. **Desktop packaging (not done yet)**:
-   - Native installers (universal macOS `.dmg`, Windows NSIS) were planned with `electron-builder@26.18.1`, but it pulls `minimatch` 9.x / 10.x (GHSA-g3hv-75wg-m249, fixed only in 11.0.1+) through `app-builder-lib` and its pinned `@electron/universal@2.0.3`, so `npm audit` is not 0. It was not added; the release workflow's desktop job still ships the portable zip under the old names.
+3. **Desktop packaging and signing (`electron-builder.yml`, release workflow job `build-desktop-installers`)**:
+   - macOS: one universal `.dmg` (`Metrolist-<v>-mac-universal.dmg`). electron-builder packs x64 and arm64 unsigned, merges them with `@electron/universal`, then signs the merged app once (`macPackager.doUniversalPack` → `doSignAfterPack`).
+   - **Signing is ad-hoc** (no Apple Developer account); an unsigned arm64 app is killed on Apple Silicon. CI passes `-c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.timestamp=none` when the `CSC_LINK` secret is empty: `MacTargetHelper.findSigningIdentity` turns identity `"-"` into an ad-hoc `Identity("-")` and `@electron/osx-sign` runs `codesign --sign - --force` on every binary, deepest first. Hardened runtime stays off (library validation would reject ad-hoc-signed frameworks); `--timestamp=none` because ad-hoc signatures are not timestamped. Never put `identity: "-"` in the yml: it would stop a real certificate from being used.
+   - With the secrets `CSC_LINK` (base64 `.p12` Developer ID Application) + `CSC_KEY_PASSWORD`, the certificate is found automatically and the default hardened runtime is used; with `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` it is also notarized (`MacTargetHelper.getNotarizeOptions`). Users then no longer need "Open Anyway".
+   - CI proves the mac build with `codesign --verify --deep --strict`, `codesign -dv`, `lipo -archs` (arm64 + x86_64) and the packaged smoke test; Windows with the packaged `win-unpacked/Metrolist.exe` smoke test (the verdict is written to `METROLIST_SMOKE_TEST_REPORT`; the exit code decides).
+   - Windows: NSIS, x64, one-click per-user install in `%LOCALAPPDATA%\Programs\Metrolist` (no admin), Start-menu + desktop shortcuts, uninstaller, keeps app data on uninstall. Not code-signed (SmartScreen "More info → Run anyway"); `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` secrets would sign it. Installer, uninstaller and exe icons come from `build/icon.png`.
 
 4. **Full-Length Duration Preservation**:
    - Never overwrite a track's `durationMs` with a 30-second preview duration (`PREVIEW_DURATION_MS`). Keep the full duration parsed from InnerTube (`ytTrack.durationMs`) or reported by `YouTubeStreamBridge.onTimeUpdateMs`.
@@ -208,8 +216,12 @@ GitHub **Dependabot** and **CodeQL** are active on this repository. Preserve the
    - When making outbound `fetch()` calls with query parameters derived from `req.query`, always construct a `new URL(...)` object, populate parameters with `.searchParams.set(...)`, and explicitly verify `url.origin === 'https://...'` before calling `fetch(url)`.
 3. **CodeQL `js/polynomial-redos` (`src/utils/metrolistCore.ts`)**:
    - Never use regexes with nested quantifiers or ambiguous `.*?` on user-controlled strings (such as `/\[.*?\]|\(.*?token.*?\)/gi` or `/\/+$/`). Use linear $O(N)$ character loops (`stripAllBracketedSegmentsLinear`, `sanitizeApiQueryText`).
-4. **Desktop server isolation (`src/server/createServer.ts`, `hostAllowlist.ts`)**:
+4. **`minimatch` override for electron-builder (`package.json` `overrides`)**:
+   - `app-builder-lib` (`minimatch@^10.2.5`) and `@electron/universal` (`minimatch@^9.0.3`) are forced to `minimatch@11.0.1`, and its dependency `@isaacs/nonrecursive-glob-match` to `1.0.1`, because of GHSA-g3hv-75wg-m249 (minimatch DoS, fixed only in 11.0.1+). It is build-time only: none of it ships in the app. The range-scoped keys leave the unaffected minimatch 3.x / 5.x copies (`@electron/asar`, `glob`, `dir-compare`, `filelist`) alone.
+   - **Remove these three entries once electron-builder depends on minimatch >= 11.0.1 by itself**, then check `npm ls minimatch` and `npm audit`.
+   - npm 10 ignores these scoped overrides when it resolves without a lockfile, so the mac / win release jobs install with `npx npm@11.21.1` and fail on `npm ls minimatch` if an override was not applied. Installs from the committed lockfile (npm 10 or 11) are correct.
+5. **Desktop server isolation (`src/server/createServer.ts`, `hostAllowlist.ts`)**:
    - Desktop mode binds `127.0.0.1` only, sends no CORS headers and rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>`. Never relax these: the desktop server is reachable by every page the user visits. Keep the window settings in `electron/security.ts` (`contextIsolation`, `sandbox`, no `nodeIntegration`, navigation / window-open / permission policies).
-5. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
+6. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
    - Keep `package-lock.json` committed at the root so GitHub Dependabot can audit exact dependency versions (`vite >= 6.4.6`, `esbuild >= 0.25.0`, `express >= 4.21.2`).
-   - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before `npm install --legacy-peer-deps` so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).
+   - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before the install (`npx -y npm@11.21.1 install --legacy-peer-deps`, see item 4) so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).

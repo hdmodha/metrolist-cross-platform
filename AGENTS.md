@@ -28,8 +28,14 @@ xvfb-run -a npm run test:electron          # macOS / Windows: npm run test:elect
 NODE_ENV=production PORT=3077 timeout 8 npx tsx server.ts
 PORT=3078 timeout 8 npm start              # bundled dist-server/server.mjs
 
-# 7. Dependencies: must report 0 vulnerabilities
+# 7. Dependencies: must report 0 vulnerabilities (and the minimatch override must hold)
 npm audit
+npm ls minimatch
+
+# 8. After touching electron/, electron-builder.yml or the build: package and smoke-test the app
+npm run desktop:pack
+METROLIST_SMOKE_TEST=1 xvfb-run -a release/linux-unpacked/metrolist --no-sandbox   # Linux
+npx @electron/asar list release/linux-unpacked/resources/app.asar                  # only dist/, dist-electron/, package.json
 ```
 
 ---

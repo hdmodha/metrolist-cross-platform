@@ -7,22 +7,45 @@ A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, And
 ## Download and install
 
 Download the latest builds from the **[GitHub Releases](../../releases)** page:
+- **macOS** (Apple Silicon and Intel, one download): `Metrolist-<version>-mac-universal.dmg`
+- **Windows** (64-bit): `Metrolist-<version>-win-x64-setup.exe`
 - **Android**: `metrolist-android-universal.apk` (install directly on any Android device)
 - **iOS / iPadOS**: `metrolist-ios-xcode-project.zip` (sideload via Xcode / AltStore, or install as an iOS Home Screen Web App)
 - **Portable Web & Server** (any OS with [Node.js](https://nodejs.org) 20.19 or newer): `metrolist-portable-web-and-server.zip`. Unzip it, open a terminal in the folder and run `npm start` (or `node dist-server/server.mjs`), then open http://localhost:3000. No `npm install` is needed: the server is a single bundled file. Set `PORT` to use another port.
-- **macOS / Windows**: native apps (a `.dmg` with `Metrolist.app`, a Windows installer) are being prepared; see [Desktop app](#desktop-app) below. Until they ship, `metrolist-macos-universal-standalone.zip` / `metrolist-windows-x64-standalone.zip` contain the same portable web & server as above and need Node.js.
 
-### Desktop app
+The macOS and Windows apps need no Node.js, terminal or browser: the whole app, including its small server, runs inside them.
 
-The desktop app is an Electron wrapper around the same app, with the server running inside it on `127.0.0.1` (port 47823). It needs no Node.js, terminal or browser once packaged. Until the installers are published, contributors can run it from source (see [CONTRIBUTING.md](./CONTRIBUTING.md)):
+### macOS
 
-```bash
-npm install
-npm run build && npm run build:electron
-npx electron .
-```
+1. Open the `.dmg` and drag **Metrolist** onto **Applications**.
+2. Open Metrolist from Applications or Launchpad.
 
-Where your data lives: liked songs, downloads, history, the queue and preferences are stored by the app's web storage in its user-data folder (macOS `~/Library/Application Support/Metrolist`, Windows `%APPDATA%\Metrolist`, Linux `~/.config/Metrolist`), together with the window size and position. The data belongs to the address `http://127.0.0.1:47823`; if another program holds that port, Metrolist starts on a fallback port and tells you that your saved music is not shown in that session.
+The app is not notarized by Apple (the project has no Apple Developer account), so the first launch is blocked once:
+- **macOS 15 (Sequoia) and newer**: macOS says *"Apple could not verify 'Metrolist' is free of malware…"*. Click **Done**, open **System Settings → Privacy & Security**, scroll down to the message about Metrolist and click **Open Anyway**, then confirm with your password.
+- **Older macOS**: right-click (or Control-click) Metrolist in Applications, choose **Open**, then **Open** again.
+- **Alternative** (Terminal): `xattr -dr com.apple.quarantine /Applications/Metrolist.app`
+
+Closing the window keeps the music playing (like Music or Spotify); click the Dock icon to bring it back and press **Cmd+Q** to quit. Media keys and Control Center work.
+
+### Windows
+
+1. Run `Metrolist-<version>-win-x64-setup.exe`. It installs for your user only (no administrator rights) and adds Start-menu and desktop shortcuts.
+2. The installer is not code-signed, so **Microsoft Defender SmartScreen** may say *"Windows protected your PC"*: click **More info → Run anyway**.
+
+To uninstall: **Settings → Apps → Installed apps → Metrolist → Uninstall**.
+
+### Updating
+
+Download the newer installer from Releases and install it over the old version (on macOS, replace the app in Applications). Your library is kept.
+
+### Where your data lives
+
+Liked songs, downloads, history, the queue, preferences and the window size and position are stored in the app's user-data folder:
+- macOS: `~/Library/Application Support/Metrolist`
+- Windows: `%APPDATA%\Metrolist`
+- Linux (from source): `~/.config/Metrolist`
+
+Uninstalling keeps this folder; delete it to start fresh. The library belongs to the app's local address, `http://127.0.0.1:47823`. If another program holds that port, Metrolist starts on a fallback port and tells you that your saved music is not shown in that session.
 
 ---
 
