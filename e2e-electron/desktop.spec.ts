@@ -65,7 +65,9 @@ test('opens one window on http://127.0.0.1:47823/ titled Metrolist, with the app
   const info = await mainWindowInfo(app);
   expect(info.count).toBe(1);
   expect(info.title).toBe('Metrolist');
-  expect(info.visible).toBe(true);
+  // The window is created hidden and shown on its first paint ('ready-to-show'). The launch helper
+  // reloads the page right away, so that paint can come after the app shell is already visible: wait for it.
+  await expect.poll(async () => (await mainWindowInfo(app)).visible, { timeout: 5000 }).toBe(true);
   await expect(app.page).toHaveTitle(/Metrolist/);
   const nav = app.page.locator('nav[aria-label="Main"]:visible');
   for (const name of ['Home', 'Search', 'Library']) {
