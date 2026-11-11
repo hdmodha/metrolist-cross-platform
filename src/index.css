@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./fonts.css";
 @custom-variant dark (&:where(.dark, .dark *));
 /* Landscape phones: very little height between the page top and the docked player / tab bar */
 @custom-variant short (@media (max-height: 500px) and (orientation: landscape));
@@ -7,7 +8,7 @@
   :root {
     --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   body {

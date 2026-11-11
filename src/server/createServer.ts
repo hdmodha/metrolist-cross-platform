@@ -12,6 +12,7 @@
  * `sendFile` SPA fallback, upstream calls use fixed allow-listed URLs with an origin check, and there is
  * no bare `'*'` route (Express 5). This module must not use `import.meta`: it is also bundled to CJS.
  */
+import compression from 'compression';
 import express, { type Express } from 'express';
 import rateLimit from 'express-rate-limit';
 import type http from 'node:http';
@@ -161,6 +162,20 @@ function resolveHost(mode: ServerMode, host: string | undefined): string {
   return host ?? '0.0.0.0';
 }
 
+/**
+ * Vite content-hashes everything under `/assets/`, so those files never change under a name and may be
+ * kept for a year. Everything else (index.html, manifest, icons) is revalidated with its ETag.
+ */
+function staticCacheHeaders(distPath: string) {
+  const assetsDir = path.resolve(distPath, 'assets') + path.sep;
+  return (res: http.ServerResponse, filePath: string): void => {
+    res.setHeader(
+      'Cache-Control',
+      path.resolve(filePath).startsWith(assetsDir) ? 'public, max-age=31536000, immutable' : 'no-cache'
+    );
+  };
+}
+
 /** Builds the Express app (not listening). */
 export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' | 'host'>): Express {
   const { mode, distPath, frontend } = options;
@@ -202,6 +217,12 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
     message: { error: 'Rate limit exceeded. Please try again shortly.' },
   });
   app.use(rateLimiterMiddleware);
+
+  if (mode === 'web') {
+    // Compressed JS / CSS / HTML / JSON for browsers (brotli or gzip, by Accept-Encoding). Not in desktop
+    // mode: that server is loopback inside Electron, so compression would only cost CPU.
+    app.use(compression());
+  }
 
   if (mode === 'web') {
     // The API is public, read-only and cookie-less, so any origin may call it. This is what lets the
@@ -377,7 +398,7 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
   if (frontend) {
     app.use(frontend);
   } else if (distPath) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, { setHeaders: staticCacheHeaders(distPath) }));
     // SPA fallback. A path-less middleware (instead of `app.get('*')`) keeps this working on Express 5,
     // where a bare `*` route pattern throws at startup. The rate limiter is mounted here explicitly too.
     app.use(rateLimiterMiddleware, (req, res, next) => {
@@ -385,6 +406,7 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
         next();
         return;
       }
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

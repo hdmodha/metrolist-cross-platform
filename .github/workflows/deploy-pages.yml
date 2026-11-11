@@ -124,6 +124,9 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Check bundle size budget
+        run: npm run check:budget
+
       - name: Read Playwright version
         id: playwright
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
