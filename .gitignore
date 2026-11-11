@@ -15,3 +15,7 @@ test-results/
 playwright-report/
 blob-report/
 dist-server/
+dist-electron/
+release/
+test-results-electron/
+playwright-report-electron/

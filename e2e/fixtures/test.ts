@@ -46,6 +46,10 @@ const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 const YOUTUBE_API = 'https://www.youtube.com/iframe_api';
 
+export function createMockApi(): MockApi {
+  return { search: defaultSearch, recommendations: defaultRecommendations, searches: [], radioRequests: [] };
+}
+
 export function defaultSearch(query: string): ApiReply<{ tracks: InnerTubeParsedTrack[] }> {
   return { body: { tracks: searchResultsFor(query) } };
 }
@@ -66,8 +70,9 @@ async function fulfillApi<T>(route: Route, reply: ApiReply<T>): Promise<void> {
   await route.fulfill({ json: reply.body });
 }
 
-async function installRoutes(context: BrowserContext, api: MockApi, unexpected: string[]): Promise<void> {
-  await context.route('**/*', async (route) => {
+/** Routes every request of `target` to the fixtures (a page in the Electron suite, `e2e-electron/`). */
+export async function installRoutes(target: Pick<BrowserContext, 'route'>, api: MockApi, unexpected: string[]): Promise<void> {
+  await target.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (LOCAL_HOSTS.has(url.hostname)) {
       if (url.pathname === '/api/innertube/search') {
@@ -374,7 +379,7 @@ export const test = base.extend<Fixtures>({
     expect(list, 'external requests must all be routed to fixtures').toEqual([]);
   },
   api: async ({ context, unexpectedRequests }, use) => {
-    const api: MockApi = { search: defaultSearch, recommendations: defaultRecommendations, searches: [], radioRequests: [] };
+    const api = createMockApi();
     await installRoutes(context, api, unexpectedRequests);
     await use(api);
   },

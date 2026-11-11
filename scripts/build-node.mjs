@@ -1,8 +1,9 @@
 /**
  * Bundles the Node side of Metrolist with esbuild (cross-platform; used by npm scripts):
  *   node scripts/build-node.mjs server    → dist-server/server.mjs   (the CLI server, `npm start`)
- * Everything (Express, the rate limiter, the InnerTube layer) is bundled, so the output needs no
- * `node_modules` at runtime. Vite stays external: only the dev path imports it, dynamically.
+ *   node scripts/build-node.mjs electron  → dist-electron/main.cjs   (the desktop app's main process)
+ * Everything (Express, the rate limiter, the InnerTube layer) is bundled, so neither output needs
+ * `node_modules` at runtime. Vite stays external: only the dev paths import it, dynamically.
  */
 import { build } from 'esbuild';
 import { rmSync } from 'node:fs';
@@ -17,6 +18,13 @@ const targets = {
     define: { __METROLIST_BUNDLED_SERVER__: 'true' },
     // Express is CommonJS and `require`s Node built-ins; give the ESM bundle a real `require`
     banner: { js: "import { createRequire as __metrolistCreateRequire } from 'node:module';\nconst require = __metrolistCreateRequire(import.meta.url);" },
+  },
+  electron: {
+    entryPoints: ['electron/main.ts'],
+    outfile: 'dist-electron/main.cjs',
+    format: 'cjs',
+    target: 'node22',
+    external: ['electron', 'vite'],
   },
 };
 

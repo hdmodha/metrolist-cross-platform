@@ -6,6 +6,7 @@
   "description": "Ad-free, Spotify-style music player for macOS, Windows, Android, iOS and the web, powered by YouTube Music.",
   "author": "Metrolist contributors",
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "engines": {
     "node": ">=20.19"
   },
@@ -13,12 +14,15 @@
     "dev": "tsx server.ts",
     "build": "vite build && npm run build:server",
     "build:server": "node scripts/build-node.mjs server",
+    "build:electron": "node scripts/build-node.mjs electron",
     "start": "node dist-server/server.mjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-server",
+    "clean": "rm -rf dist dist-server dist-electron release",
     "lint": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
-    "test:e2e": "playwright test"
+    "test": "tsx --test \"src/**/*.test.ts\" \"electron/**/*.test.ts\"",
+    "test:e2e": "playwright test",
+    "test:electron": "npm run build && npm run build:electron && playwright test -c playwright.electron.config.ts",
+    "desktop:dev": "npm run build:electron && electron . --metrolist-dev"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
@@ -28,6 +32,7 @@
     "@types/react": ">=19.0.0",
     "@types/react-dom": ">=19.0.0",
     "@vitejs/plugin-react": ">=4.4.0",
+    "electron": "45.1.0",
     "esbuild": ">=0.25.0",
     "express": ">=4.21.2",
     "express-rate-limit": "^8.7.4",

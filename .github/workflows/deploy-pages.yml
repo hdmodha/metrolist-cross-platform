@@ -40,10 +40,19 @@ jobs:
       - name: Run end-to-end browser tests (hermetic, fake YouTube player)
         run: npm run test:e2e
 
+      # The desktop app's main process (Electron) with the built frontend, under a virtual display.
+      # Hermetic like the browser suite; about half a minute.
+      - name: Run desktop app (Electron) tests
+        run: |
+          npm run build:electron
+          xvfb-run -a npx playwright test -c playwright.electron.config.ts
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            playwright-report-electron/
           retention-days: 14
