@@ -111,7 +111,7 @@ export const HomePage = React.memo(function HomePage({
       <h1 className="text-[28px] short:text-2xl lg:text-4xl font-extrabold tracking-tight text-white">{greeting}</h1>
 
       {recentTracks.length > 0 && (
-        <Shelf title="Recently played">
+        <Shelf title="Recently played" memoryId="recent">
           <SongCards tracks={recentTracks.slice(0, MAX_SHELF_ITEMS)} onPlay={playRecent} {...status} />
         </Shelf>
       )}
@@ -120,6 +120,7 @@ export const HomePage = React.memo(function HomePage({
         title={activeTrack ? activeTrack.title : 'Popular right now'}
         eyebrow={activeTrack ? 'Because you listened to' : undefined}
         busy={shelfLoading}
+        memoryId="recommendations"
       >
         {shelfLoading || shelfTracks.length === 0 ? (
           <SkeletonCards />
@@ -128,7 +129,7 @@ export const HomePage = React.memo(function HomePage({
         )}
       </Shelf>
 
-      <Shelf title="Artists">
+      <Shelf title="Artists" memoryId="artists">
         {artists.map((artist) => (
           <ArtistCard key={artist.name} artist={artist} />
         ))}

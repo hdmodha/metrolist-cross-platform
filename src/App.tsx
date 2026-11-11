@@ -1,6 +1,15 @@
 import React from 'react';
 import { AppActionsContext, type AppActions } from './app/AppActionsContext';
-import { formatRoute, navigate, type HistoryFlags, type Route } from './app/router';
+import {
+  currentRoute,
+  focusSearchInput,
+  getTabMemory,
+  saveScrollPosition,
+  scrollPageToTop,
+  useNavigationMemory,
+} from './app/navigationMemory';
+import { backAs, formatRoute, historyFlags, navigate, type HistoryFlags, type NavigationIntent, type Route } from './app/router';
+import { planTabPress, type TabName } from './app/tabMemory';
 import { useNowPlaying } from './app/useNowPlaying';
 import { useRoute } from './app/useRoute';
 import { BottomNav } from './components/BottomNav';
@@ -35,6 +44,7 @@ export default function App() {
   const player = usePlayer();
   const { state, actions, activeTrack, clock } = player;
   const route = useRoute();
+  useNavigationMemory(route);
   const nowPlaying = useNowPlaying(activeTrack !== null);
   const [queueFirst, setQueueFirst] = React.useState(false);
 
@@ -48,18 +58,36 @@ export default function App() {
 
   const { open: openNowPlaying, close: closeNowPlaying, leaveForNavigation } = nowPlaying;
   const appActions = React.useMemo<AppActions>(() => {
-    const go = (to: Route, options: { flags?: HistoryFlags } = {}) => {
+    const go = (to: Route, options: { flags?: HistoryFlags; intent?: NavigationIntent } = {}) => {
+      saveScrollPosition();
       const replace = leaveForNavigation();
       if (!replace && !options.flags && formatRoute(to) === window.location.hash) {
-        window.scrollTo(0, 0);
+        scrollPageToTop();
         return;
       }
-      navigate(to, { replace, flags: options.flags });
-      window.scrollTo(0, 0);
+      // The scroll position follows in useNavigationMemory (top, or restored for `tab`)
+      navigate(to, { replace, flags: options.flags, intent: options.intent ?? 'push' });
+    };
+    const goTab = (tab: TabName) => {
+      const press = planTabPress(getTabMemory(), currentRoute(), tab);
+      // Re-tapping Search focuses the box inside the tap itself, so mobile keyboards open
+      if (tab === 'search' && press.kind !== 'switch') focusSearchInput();
+      if (press.kind === 'top') {
+        scrollPageToTop();
+      } else if (press.kind === 'switch') {
+        go(press.to, { intent: 'tab' });
+      } else if (tab === 'search' && historyFlags().searchFromEmpty) {
+        // Like clearing the box: go back over the results entry the first query pushed
+        saveScrollPosition();
+        backAs('retap');
+      } else {
+        go(press.to, { intent: 'retap' });
+      }
     };
     return {
       player: actions,
       go,
+      goTab,
       goToArtist: (artist: string) => go({ name: 'search', query: artist }),
       openNowPlaying: () => {
         setQueueFirst(false);
