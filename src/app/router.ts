@@ -65,6 +65,16 @@ export function isSameRoute(a: Route, b: Route): boolean {
   return formatRoute(a) === formatRoute(b);
 }
 
+/**
+ * What going to `to` does to the history when the location is `currentHash`: nothing when it is
+ * already shown; a replace when the same page is shown under another URL (a fresh start has no hash
+ * yet, an unknown route shows Home), so Back never lands on the same page again; else a push.
+ */
+export function navigationEffect(to: Route, currentHash: string): 'none' | 'replace' | 'push' {
+  if (formatRoute(to) === currentHash) return 'none';
+  return isSameRoute(parseRoute(currentHash), to) ? 'replace' : 'push';
+}
+
 /* ------------------------------------ browser location -------------------------------------- */
 
 const listeners = new Set<() => void>();
@@ -111,10 +121,11 @@ export function historyFlags(): HistoryFlags {
 export function navigate(route: Route, options: { replace?: boolean; flags?: HistoryFlags } = {}): void {
   const url = formatRoute(route);
   const flags = options.flags ?? null;
-  if (options.replace) {
-    window.history.replaceState(flags, '', url);
+  const effect = options.replace || flags ? null : navigationEffect(route, window.location.hash);
+  if (effect === 'none') return;
+  if (options.replace || effect === 'replace') {
+    window.history.replaceState(options.replace ? flags : historyFlags(), '', url);
   } else {
-    if (url === window.location.hash && !flags) return;
     window.history.pushState(flags, '', url);
     window.scrollTo(0, 0);
   }

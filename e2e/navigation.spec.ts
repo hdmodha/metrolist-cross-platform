@@ -77,6 +77,16 @@ test.describe('navigation', () => {
     await expect(page).toHaveURL('about:blank');
   });
 
+  test('the Home tab on a fresh start (no hash in the URL yet) adds no history entry: Back still leaves the app', async ({ app, page }) => {
+    await page.goto('about:blank');
+    await app.open();
+    expect(await app.hash()).toBe('');
+    await app.tab('Home').click();
+    await expect(app.heading).toHaveText(GREETING);
+    await page.goBack();
+    await expect(page).toHaveURL('about:blank');
+  });
+
   test('Home: "Recently played" appears after playing; recommendations follow the last song', async ({ app, api }) => {
     await app.open();
     const title = await app.searchAndPlayFirst('kavinsky nightcall');
