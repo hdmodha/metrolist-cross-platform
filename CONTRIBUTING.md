@@ -42,6 +42,9 @@ npm run lint
 # Verify production build
 npm run build
 
+# Check the bundle size budget (JS, CSS, fonts; no Google Fonts reference)
+npm run check:budget
+
 # Production server smoke start (bundled server)
 PORT=3078 npm start
 

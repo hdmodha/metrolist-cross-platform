@@ -35,6 +35,7 @@ npm run lint
 
 # 3. Run production Vite bundle build (must exit 0)
 npm run build
+npm run check:budget                       # size budget: JS 150 KB / CSS 20 KB gzip, fonts 220 KB, no Google Fonts reference
 
 # 4. Run the hermetic end-to-end browser suite (phone, small phone, landscape phone, tablet, desktop)
 npm run test:e2e
@@ -77,6 +78,10 @@ npx @electron/asar list release/linux-unpacked/resources/app.asar               
 - Routing is a dependency-free hash router; Now Playing's open state is backed by one history entry so Back closes it.
 - Every song is a YouTube Music song. "Download" only adds a song to the Downloads list (no audio is stored) — do not imply offline playback.
 - The server is one factory (`src/server/createServer.ts`) used by the CLI (`server.ts`, web mode) and the Electron main process (`electron/`, desktop mode). Electron decision logic lives in pure `electron/policies/*` modules with tests.
+- Efficiency: covers are right-sized (`artworkUrlForSize`): rows and the mini player use `small`; only Now Playing and SongCard ask for `large`.
+- Efficiency: no external requests at start-up. Fonts are bundled (`src/fonts.css`); never add a Google Fonts or other CDN link.
+- Efficiency: `compression` and the immutable `/assets/*` cache headers are web-only; keep asset names content-hashed.
+- Efficiency: the periodic save writes only `metrolist.player.position.v1`, and the position is polled slowly in the background (`src/player/appActivity.ts`); it still never enters React state.
 - See `./CLAUDE.md` for the file map, data flows and caveats.
 
 ## 3. Prioritized Backlog for Collaborating LLMs

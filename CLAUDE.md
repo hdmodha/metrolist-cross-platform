@@ -52,6 +52,7 @@ A platform that cannot have a change is **named, with the reason, in the commit 
   ```bash
   npm run build
   npm start                              # node dist-server/server.mjs (always production; PORT, RATE_LIMIT_PER_MINUTE)
+  npm run check:budget                   # after build: gzip JS / CSS, fonts, no Google Fonts reference (scripts/check-bundle-budget.mjs)
   ```
 - **Desktop app (Electron)**:
   ```bash
@@ -93,6 +94,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 ├── server.ts                              # CLI entry: env (PORT, NODE_ENV, RATE_LIMIT_PER_MINUTE) → startMetrolistServer (web mode); Vite only in dev (dynamic import)
 ├── scripts/build-node.mjs                 # esbuild: server.ts → dist-server/server.mjs (ESM), electron/main.ts → dist-electron/main.cjs (CJS); all deps bundled, vite external
 ├── scripts/generate-ad-block-rules.ts     # `npm run adblock:rules` (= `native:artifacts`): writes the files of src/shared/nativeArtifacts.ts
+├── scripts/check-bundle-budget.mjs (+ .test.ts) # `npm run check:budget` (after `npm run build`): fails when gzipped JS > 150 KB or CSS > 20 KB, fonts > 220 KB, or `dist/index.html` names Google Fonts
 ├── scripts/prepare-native.mjs (+ .test.ts) # `npm run native:prepare [-- --check]`: after `cap add` / `cap sync`, installs the Android MainActivity template (only over Capacitor's exact default) and adds UIBackgroundModes audio to the iOS Info.plist; idempotent
 ├── native/android-app/MainActivity.java   # Template of the app's MainActivity: setContentView swaps Capacitor's bridge_layout_main for the plugin's layout (BackgroundPlaybackWebView), falls back to Capacitor's
 ├── native/capacitor-background-playback/  # Local Capacitor plugin (Android + iOS), a `file:` devDependency `@metrolist/capacitor-background-playback`
@@ -130,14 +132,16 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 ├── electron-builder.yml                   # Packaging: files (dist/, dist-electron/, package.json only), universal dmg, NSIS per-user (x64 + arm64), AppImage + deb (x64 + arm64)
 ├── build/icon.png                         # 1024 px app icon (electron-builder derives .icns / .ico; the rest of build/ is ignored)
 ├── capacitor.config.json                  # Capacitor config for Android (.apk) & iOS native packaging
+├── THIRD_PARTY_NOTICES.md                 # Licences of the bundled third-party assets (the two fonts: SIL OFL 1.1)
 ├── src/
 │   ├── server/
-│   │   ├── createServer.ts                # Express app factory: mode 'web' | 'desktop', routes (search, recommendations, embeddable), rate limiter, InnerTube + oEmbed transports, SPA fallback
+│   │   ├── createServer.ts                # Express app factory: mode 'web' | 'desktop', routes (search, recommendations, embeddable), rate limiter, InnerTube + oEmbed transports, SPA fallback, `compression` (web mode only), `Cache-Control` (`/assets/*` immutable, everything else `no-cache`)
 │   │   ├── hostAllowlist.ts               # Desktop DNS-rebinding check: Host must be 127.0.0.1:<port> / localhost:<port>
 │   │   ├── serverConfig.ts                # PORT / RATE_LIMIT_PER_MINUTE parsing, dist/ location (source or bundled)
 │   │   └── devFrontend.ts                 # Vite dev middlewares (dynamic import; npm run dev, desktop:dev)
 │   ├── App.tsx                            # Shell: usePlayer() + useRoute() + useNowPlaying() in, chrome + current page out
 │   ├── appVersion.ts                      # APP_VERSION (package.json version, Vite `define` __APP_VERSION__)
+│   ├── fonts.css                          # Bundled web fonts: DM Sans + Plus Jakarta Sans variable woff2 (latin, latin-ext) from `@fontsource-variable/*`; mono is a system stack
 │   ├── app/
 │   │   ├── router.ts                      # Hash router: pure parseRoute / formatRoute + navigate() + history flags
 │   │   ├── useRoute.ts                    # useSyncExternalStore on hashchange / popstate
@@ -158,6 +162,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   │   ├── NowPlaying.tsx                 # Full-screen dialog (chevron / Escape / Back / swipe-down to close)
 │   │   ├── QueueSheet.tsx                 # Up next: reorder, remove, clear, "Autoplay similar songs" switch
 │   │   ├── SongRow.tsx / SongCard.tsx     # The one row / card component; "⋮" opens TrackMenu
+│   │   ├── Artwork.tsx                    # Cover image: `size` small (default, right-sized via utils/artworkUrl.ts) or large (NowPlaying, SongCard); falls back to the original URL once
 │   │   ├── TrackMenu.tsx + trackMenuItems.tsx  # Play next, Add to queue, Like, Download, Go to artist (portal + keyboard)
 │   │   ├── SeekBar.tsx / ProgressLine.tsx # The ONLY components subscribed to the playback clock
 │   │   ├── Notices.tsx                    # Notice toast + "Waiting for connection… retrying"
@@ -173,6 +178,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   │   ├── playerCore.ts                  # Pure normalized PlayerState + playerReducer + selectors
 │   │   ├── playerStore.ts                 # Tiny external store around the reducer (read via useSyncExternalStore)
 │   │   ├── playbackClock.ts               # Playback position store outside React state
+│   │   ├── appActivity.ts                 # Foreground / background store (page visibility, native `lifecycle`, desktop events) → position poll interval (250 ms / 1000 ms)
 │   │   ├── effectPolicies.ts              # Pure decisions for side effects: stream-error recovery, embeddability pre-check targets, stall, save throttle, shortcuts
 │   │   ├── streamErrors.ts                # IFrame error codes → reason + recovery (alternate / retry once / skip), notice texts
 │   │   ├── alternateUploads.ts            # Scores / ranks / chooses another upload of the same song (linear, no regex over titles)
@@ -182,7 +188,8 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │       ├── metrolistCore.ts               # Pure logic: InnerTube parsers (incl. radio pages) + shared request layer, song search terms, sanitizers
 │       ├── apiClient.ts                   # Client network layer: `/api/*` backend, `VITE_API_BASE_URL`, native-shell direct InnerTube + oEmbed, search / embeddability caches
 │       ├── embeddability.ts               # oEmbed URL (fixed, origin-checked), status → true / false / null, `ids` parameter and payload validation
-│       ├── persistence.ts                 # Validated localStorage persistence (v2) + v1 migration + PlayerState mappers
+│       ├── artworkUrl.ts                  # Right-sized covers: `artworkUrlForSize(url, 'small' | 'large')` (ytimg → mqdefault; googleusercontent / ggpht `=w…-h…` / `=s…` → 120); pure
+│       ├── persistence.ts                 # Validated localStorage persistence (v2) + v1 migration + PlayerState mappers + the position key (`metrolist.player.position.v1`)
 │       ├── recentSearches.ts              # Recent searches (newest first, max 10, persisted)
 │       ├── debugLog.ts                    # In-memory ring buffer (100) + describePlayerChange / connectPlayerDebugLog / merge / format (pure, tested)
 │       ├── greeting.ts, lruCache.ts, menuNavigation.ts
@@ -193,7 +200,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │       ├── webkitContentBlocker.ts        # adBlock.ts → WebKit content-rule list (iOS); simulator + WEBKIT_KNOWN_DIFFERENCES (top-level navigations, user info)
 │       ├── systemPauseGuard.ts + systemPauseGuardVectors.ts  # Reference "system paused us" guard + vectors (TS, Java JUnit, Swift runner)
 │       ├── nativeArtifacts.ts             # Every generated native file (ad-block JSON ×2 + vectors, content-blocker list, guard vectors); its test keeps them in sync
-│       ├── appBackgroundSignal.ts         # Desktop: the page event the main process dispatches on minimize / hide (the page saves)
+│       ├── appBackgroundSignal.ts         # Desktop: the page events the main process dispatches: `metrolist:app-background` on minimize / hide (the page saves), `metrolist:app-foreground` on restore / show (the page polls fast again)
 │       ├── adBlockArtifacts.ts            # The generated ad-block files (paths + data), part of nativeArtifacts.ts
 │       └── adBlockRules.json              # The same rules as data (generated; a test keeps it in sync)
 │   (every pure module has its `*.test.ts` next to it; `npm test` runs them all)
@@ -202,8 +209,8 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 │   ├── fixtures/                          # test.ts (hermetic routes incl. `/api/innertube/embeddable` via `api.embeddable` + MetrolistApp driver), fakeYouTube.ts (`errorIds`, `readyDelayMs`, `probeUrls`, `lateErrorOnSwitch`, `getVideoData`, `loaded` history), apiFixtures.ts, storage.ts (seeded saved data), ports.ts
 │   └── *.spec.ts                          # search, navigation, nowplaying, library, playback, queue, resilience, persistence, performance, native (no backend + simulated BackgroundPlayback plugin), layout
 └── .github/workflows/
-    ├── deploy-pages.yml                   # CI on pull requests into main only (not again on the merge push): `changes` (docs-only PRs skip the rest), then parallel unit-and-typecheck, browser-e2e, desktop-electron; `build-and-test` is the one required check
-    └── release-native-builds.yml          # Multi-OS release pipeline: Web, macOS universal .dmg, Windows NSIS (x64 + arm64), Linux AppImage + .deb (x64 + arm64), Android APK/AAB (signed with secrets, else debug; JUnit, dex / layout checks), iOS (build-ios-app on macOS: Swift vectors, WebKit rule compile, simulator xcodebuild, unsigned .ipa, prepared Xcode project); publish adds SHA256SUMS.txt and a downloads table
+    ├── deploy-pages.yml                   # CI on pull requests into main only (not again on the merge push): `changes` (docs-only PRs skip the rest), then parallel unit-and-typecheck, browser-e2e (also `npm run check:budget`), desktop-electron; `build-and-test` is the one required check
+    └── release-native-builds.yml          # Multi-OS release pipeline: Web (`verify-and-bundle-web` also runs `npm run check:budget`), macOS universal .dmg, Windows NSIS (x64 + arm64), Linux AppImage + .deb (x64 + arm64), Android APK/AAB (signed with secrets, else debug; JUnit, dex / layout checks), iOS (build-ios-app on macOS: Swift vectors, WebKit rule compile, simulator xcodebuild, unsigned .ipa, prepared Xcode project); publish adds SHA256SUMS.txt and a downloads table
 ```
 
 ---
@@ -238,6 +245,8 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
    - **Connectivity blips must not interrupt playback** (`effectPolicies.ts`): a window `offline` event alone does nothing (YouTube keeps playing from its buffer). "Waiting for network" starts only on a real failure: the IFrame API cannot load, a player error while `navigator.onLine === false`, or ≥ 8 s stuck in `loading` / `buffering` while offline (`shouldWaitForNetworkAfterStall`). A retry never re-creates a stream whose status is `playing` (`planNetworkRetry` → `networkRestored`).
    - **Bridge callbacks must go through the `latest` ref** (`YouTubeStreamBridge.tsx`); `usePlayer.ts` callbacks read `store.getState()`. The player is long-lived; capturing props at mount made "track ended" act on a stale queue.
    - **Performance rule**: the position lives in `playbackClock.ts`, not React state. Only `SeekBar` and the mini player's `ProgressLine` (and handlers / persistence / MediaSession via `clock.subscribe`) read it; nothing above them (shell, pages, mini player, player bar, Now Playing, queue sheet) may re-render on ticks — the browser suite counts renders through `countRender`, with Now Playing open and closed.
+   - **Position polling** (`src/player/appActivity.ts`): the bridge polls the position every 250 ms with the app in the foreground and every 1000 ms in the background (`positionPollIntervalMs`; nothing shows it then). `usePlayer` feeds `appActivity` from `visibilitychange`, the native `lifecycle` events (`lifecycleToActivity`: stop → background, resume → foreground) and the desktop events `metrolist:app-background` / `metrolist:app-foreground`. On the way back the bridge re-arms its timer and polls once, so the seek bar is right at once.
+   - **Stream quality in the debug log**: the bridge reports the quality the player picked (`onPlaybackQualityChange` and the first `PLAYING`, via `getPlaybackQuality()`) as `stream quality: <q> (video <id>)`, once per video and quality. It is measured only, never requested.
 
 5a. **Unplayable uploads: error classes, embeddability pre-check, alternate scoring**:
    - **Error classes** (`streamErrors.ts`): IFrame `onError` 2 (invalid id), 100 (removed / private), 101 / 150 (owner disallows embedding) → look for another upload at once; 5 (HTML5 player error, often transient) → re-create the player for the same video once (`retry`, tracked per `trackId videoId` in `usePlayer`), then another upload; 152 / 153 (embedder / referrer rejected: every upload would fail) → retry once, then skip. Each reason has its own notice (`unplayableNotice`: "…its owner turned that off. Skipping…", "…was removed from YouTube or is private…", …). Only content restrictions (2, 100, 101 / 150, the pre-check) mark a song unplayable.
@@ -258,8 +267,9 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
 
 8. **Persistence (`src/utils/persistence.ts`)**:
    - v2 under `metrolist.player.v2`: a track table plus the id lists above, the queue window (≤ 200 songs around the active one), active song, position, `playingFrom`, radio session and preferences (volume, mute, shuffle, repeat, autoplay). Everything read back is validated field by field; corrupt data falls back to a fresh install.
+   - **Position key** `metrolist.player.position.v1` (`{ trackId, positionMs }`, validated): every full save writes it too (both keys always agree), and the periodic save while playing writes only it (`savePlaybackPosition`, a few bytes instead of the library). `loadPlayerState` applies it over v2 only when its `trackId` is the persisted active track; otherwise v2's position stands.
    - v1 (`metrolist.player.v1`) is migrated once on load: library tracks with `liked` → `likedIds`, `cachedOffline` → `downloadedIds`, the library order → Recently played; the old demo songs (`trk-…`), their flags, demo queue entries and the EQ gains are dropped; an active demo song leaves nothing active. v1 is removed only after v2 was written.
-   - Launch restores the last queue, song and position, always paused (`loadPlayerState` → `fromPersistedState` → `restore`). Saves are debounced on state change; the position is saved at most every 5 s while playing, on pause, on `visibilitychange` → hidden, on `pagehide`, on the native plugins' `lifecycle` `pause` / `stop` (Android / iOS: the page may stay "visible" while music plays) and on the desktop window's `minimize` / `hide` (`metrolist:app-background`). Recent searches live in `metrolist.recentSearches.v1`.
+   - Launch restores the last queue, song and position, always paused (`loadPlayerState` → `fromPersistedState` → `restore`). Saves are debounced on state change; the periodic save while playing (at most every 5 s) writes only the position key; full saves happen on pause, on `visibilitychange` → hidden, on `pagehide`, on the native plugins' `lifecycle` `pause` / `stop` (Android / iOS: the page may stay "visible" while music plays) and on the desktop window's `minimize` / `hide` (`metrolist:app-background`). Recent searches live in `metrolist.recentSearches.v1`.
 
 9. **Desktop app (`electron/`, Electron 45)**:
    - The main process starts the server in **desktop mode** (`startMetrolistServer({ mode: 'desktop' })`) and loads `http://localhost:<port>/` (the server still binds 127.0.0.1). **The port is fixed (47823, `policies/ports.ts`)**: localStorage — the whole library above — is per origin, and the origin includes the port, so a random port would lose the listener's data on every launch. Busy ports fall back to 47824–47827, then any port, with a one-time notice ("saved music not available in this session"). It is http, not a custom `app://` scheme, because the YouTube embed needs a normal http origin / referrer.
@@ -269,6 +279,7 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
    - Window security (`security.ts`): `contextIsolation`, `sandbox`, no `nodeIntegration`, no preload, no `<webview>`, DevTools only unpackaged. `will-navigate` / `setWindowOpenHandler` follow `decideNavigation`: same origin stays, other http(s) → `shell.openExternal`, everything else denied. Iframes (the YouTube player) are not window navigations. Permissions: only `fullscreen` and `clipboard-sanitized-write`; devices denied.
    - Behaviour: single-instance lock (a second launch shows the window); bounds / maximised saved in `userData/window-state.json`, clamped to a visible display (`policies/windowState.ts`); min 360×560; background `#09090B`, window title fixed to "Metrolist"; `backgroundThrottling: false` + `disable-renderer-backgrounding` / `disable-background-timer-throttling`; `autoplay-policy=no-user-gesture-required`. macOS: app / Edit (needed for Cmd+C / Cmd+V) / View / Window menus, closing hides (music keeps playing), Dock click shows, Cmd+Q quits. Windows / Linux: no menu, closing quits. Media keys come from the page's MediaSession code: never disable Chromium's `HardwareMediaKeyHandling`.
    - **Minimised / hidden keeps playing** (`backgroundThrottling: false`): the page stays `visibilityState` `visible` and gets no `visibilitychange` (proven by an Electron test under Xvfb), so `mainWindow.ts` runs the constant `appBackgroundScript()` (`src/shared/appBackgroundSignal.ts`, `webContents.executeJavaScript`, no preload) on `minimize` and `hide`; `usePlayer` saves on that `metrolist:app-background` event.
+   - **Foreground signal** (`appForegroundScript()`, `mainWindow.ts` on `restore` / `show`): `usePlayer` feeds `appActivity` from `metrolist:app-foreground`, so the position is polled at full speed again at once (item 5, Position polling).
    - Bundling: `dist-electron/main.cjs` inlines everything except `electron` (and `vite`, only loaded by `--metrolist-dev`), so `app.asar` holds only `dist/`, `dist-electron/main.cjs` and a trimmed `package.json` — no `node_modules`, `src/` or source maps (check with `npx @electron/asar list release/*/resources/app.asar`). Serving `dist/` from inside `app.asar` works (Electron's fs patch).
    - **Smoke test**: `METROLIST_SMOKE_TEST=1` uses a throw-away `userData`, waits for the page, checks `<main>` + `nav[aria-label="Main"]` + a title naming Metrolist, requests `/manifest.webmanifest`, prints `METROLIST SMOKE TEST: PASS|FAIL (…)` and exits 0 / 1 (45 s timeout). No YouTube needed.
    - **Tests**: `npm run test:electron` launches the app with `--user-data-dir` per test, `--host-resolver-rules` (no external DNS) and a dead proxy for the in-process server (`NODE_USE_ENV_PROXY`), installs the web suite's routes on the page, then reloads. Page-level routes are required: context routes do not reach Electron's first window. `webRequest` runs before Playwright's page routes: a request the ad blocker cancels never reaches a route (the ad-blocking test routes the ad URL to `continue()` and also checks the main process's log line, because the suite's catch-all would abort with the same `ERR_BLOCKED_BY_CLIENT`). On Linux it adds `--no-sandbox` (root containers, Ubuntu 24.04 AppArmor).
@@ -296,6 +307,12 @@ The app is a Spotify-style, multi-page music player inspired by Metrolist (YouTu
    - `NowPlayingController`: `AVAudioSession` `.playback` activated at the first `playing` / `buffering` update (needs `UIBackgroundModes` `audio`, added by `native:prepare`); `MPNowPlayingInfoCenter` (title, artist, album, artwork ≤ 2 MB, duration, elapsed time, rate); `MPRemoteCommandCenter` play / pause / toggle / next / previous / changePlaybackPosition → `command` events (reason `session`); route change `oldDeviceUnavailable` → `pause` (`noisy`); `willResignActive` → `lifecycle` `pause`, `didEnterBackground` → `stop` + guard background, `didBecomeActive` → `resume`; an audio interruption (call, alarm) disarms the guard.
    - The shared `metrolist-page-visibility.js` (the Android asset, one copy) as a `WKUserScript` at document start, `forMainFrameOnly: false` (the script checks the origin itself); ad blocking with a `WKContentRuleList` compiled from `ios/Resources/metrolist-content-blocker.json` (generated by `webkitContentBlocker.ts`: host rules `^https?://([a-z0-9_.-]*\.)?host\.?(:[0-9]+)?/`, path rules per YouTube host, never-block paths as `ignore-previous-rules` for the path-rule hosts, never-block hosts as `ignore-previous-rules` LAST; case-sensitive). Known differences (pinned by `WEBKIT_KNOWN_DIFFERENCES` + test): top-level navigations to ad hosts are blocked on iOS, URLs with user info are not.
    - Unverified assumptions: WebKit may still pause video players in the background even with audio background mode (the guard then resumes once); the YouTube embed may reject the `capacitor://localhost` origin; the remote commands reach a suspended app.
+
+12. **Efficiency rules** (keep them when changing covers, fonts, the server or the bundle):
+   - **Small images for small boxes**: `artworkUrlForSize(url, 'small' | 'large')` (`src/utils/artworkUrl.ts`) picks the size; `Artwork.tsx` defaults to `small` and only NowPlaying and SongCard ask for `large`. ytimg `hqdefault` etc. → `mqdefault` (no signed query); googleusercontent / ggpht `=w…-h…` / `=s…` → 120. Measured on live results: ~27 KB → ~13.5 KB per row image. `track.coverUrl`, persistence, MediaSession and the native artwork keep the large URL; a failed small variant falls back to the original URL once.
+   - **No external requests at start-up**: fonts ship with the app (`src/fonts.css`, DM Sans + Plus Jakarta Sans, SIL OFL, see `THIRD_PARTY_NOTICES.md`); the mono font is a system stack; `index.html` has no Google Fonts links. `e2e/fonts.spec.ts` fails on any request to a font CDN.
+   - **Hashed assets immutable, compression web-only**: `compression` runs in web mode only (desktop is loopback); `/assets/*` → `public, max-age=31536000, immutable`, everything else and the SPA fallback → `no-cache`. Measured: the app's JS goes over the wire as ~115 KB instead of 367 KB.
+   - **Budgets**: `npm run check:budget` (`scripts/check-bundle-budget.mjs`) must pass: JS ≤ 150 KB gzip, CSS ≤ 20 KB gzip, fonts ≤ 220 KB, no Google Fonts reference in `dist/index.html`. Current: JS 111.9 KB, CSS 11.2 KB, fonts 101.8 KB. Runs in PR CI (`browser-e2e`) and the release `verify-and-bundle-web` job.
 
 ---
 
@@ -351,7 +368,7 @@ GitHub **Dependabot** and **CodeQL** are active on this repository. Preserve the
    - npm 10 ignores these scoped overrides when it resolves without a lockfile, so the mac / win release jobs install with `npx npm@11.21.1` and fail on `npm ls minimatch` if an override was not applied. Installs from the committed lockfile (npm 10 or 11) are correct.
 5. **Desktop server isolation (`src/server/createServer.ts`, `hostAllowlist.ts`)**:
    - Desktop mode binds `127.0.0.1` only, sends no CORS headers and rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>`. Never relax these: the desktop server is reachable by every page the user visits. Keep the window settings in `electron/security.ts` (`contextIsolation`, `sandbox`, no `nodeIntegration`, navigation / window-open / permission policies).
-   - `webContents.executeJavaScript` only ever runs constant scripts (`appBackgroundScript()`, the smoke probe, the two scripts of `storageMigration.ts`): never build page code from input or page data; no preload is added for page signals.
+   - `webContents.executeJavaScript` only ever runs constant scripts (`appBackgroundScript()`, `appForegroundScript()`, the smoke probe, the two scripts of `storageMigration.ts`): never build page code from input or page data; no preload is added for page signals.
 6. **Cross-Platform CI Lockfile Handling (`.github/workflows/release-native-builds.yml`)**:
    - Keep `package-lock.json` committed at the root so GitHub Dependabot can audit exact dependency versions (`vite >= 6.4.6`, `esbuild >= 0.25.0`, `express >= 4.21.2`).
    - In GitHub Actions jobs running on `macos-latest` or `windows-latest`, keep `rm -f package-lock.json` before the install (`npx -y npm@11.21.1 install --legacy-peer-deps`, see item 4) so npm fetches OS-specific native optional binaries (`@rollup/rollup-*`, `@tailwindcss/oxide-*`).
