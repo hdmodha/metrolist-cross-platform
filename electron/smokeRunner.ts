@@ -1,8 +1,10 @@
 /** Runs the `METROLIST_SMOKE_TEST=1` check against the live window and exits 0 (PASS) / 1 (FAIL). */
 import { app, type BrowserWindow, type WebContents } from 'electron';
+import fs from 'node:fs';
 import {
   SMOKE_TEST_TIMEOUT_MS,
   evaluateSmokeTest,
+  smokeTestReportPath,
   smokeTestTimedOut,
   type SmokeObservation,
   type SmokeVerdict,
@@ -26,6 +28,14 @@ export function finishSmokeTest(verdict: SmokeVerdict): void {
   if (finished) return;
   finished = true;
   console.log(verdict.line);
+  const reportPath = smokeTestReportPath(process.env);
+  if (reportPath) {
+    try {
+      fs.writeFileSync(reportPath, `${verdict.line}\n`);
+    } catch (err) {
+      console.error('[metrolist] could not write the smoke test report:', err);
+    }
+  }
   app.exit(verdict.pass ? 0 : 1);
 }
 

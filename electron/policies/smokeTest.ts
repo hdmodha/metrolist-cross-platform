@@ -28,6 +28,15 @@ export function isSmokeTestEnabled(env: Record<string, string | undefined>): boo
   return env.METROLIST_SMOKE_TEST === '1';
 }
 
+/**
+ * Where to also write the verdict line (`METROLIST_SMOKE_TEST_REPORT`), for CI shells that do not show
+ * a GUI app's stdout (Windows). `null` when unset.
+ */
+export function smokeTestReportPath(env: Record<string, string | undefined>): string | null {
+  const value = env.METROLIST_SMOKE_TEST_REPORT?.trim();
+  return value ? value : null;
+}
+
 export function evaluateSmokeTest(observation: SmokeObservation): SmokeVerdict {
   const problems: string[] = [];
   if (observation.error) problems.push(observation.error);

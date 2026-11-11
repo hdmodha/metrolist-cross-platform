@@ -1,5 +1,7 @@
 node_modules/
-build/
+# electron-builder resources: only the source icon is tracked
+build/*
+!build/icon.png
 dist/
 coverage/
 .DS_Store

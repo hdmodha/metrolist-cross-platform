@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SMOKE_TEST_TIMEOUT_MS, evaluateSmokeTest, isSmokeTestEnabled, smokeTestTimedOut, type SmokeObservation } from './smokeTest';
+import {
+  SMOKE_TEST_TIMEOUT_MS,
+  evaluateSmokeTest,
+  isSmokeTestEnabled,
+  smokeTestReportPath,
+  smokeTestTimedOut,
+  type SmokeObservation,
+} from './smokeTest';
 
 const ok: SmokeObservation = { title: 'Metrolist — Ad-Free Music Player', hasMain: true, hasMainNavigation: true, manifestStatus: 200 };
 
@@ -42,4 +49,11 @@ test('fails and says why for each missing piece', () => {
     assert.match(verdict.line, /^METROLIST SMOKE TEST: FAIL \(/);
     assert.match(verdict.line, reason);
   }
+});
+
+test('the verdict can also be written to METROLIST_SMOKE_TEST_REPORT (Windows CI)', () => {
+  assert.equal(smokeTestReportPath({ METROLIST_SMOKE_TEST_REPORT: 'C:\\temp\\smoke.txt' }), 'C:\\temp\\smoke.txt');
+  assert.equal(smokeTestReportPath({ METROLIST_SMOKE_TEST_REPORT: '  /tmp/smoke.txt ' }), '/tmp/smoke.txt');
+  assert.equal(smokeTestReportPath({ METROLIST_SMOKE_TEST_REPORT: '   ' }), null);
+  assert.equal(smokeTestReportPath({}), null);
 });
