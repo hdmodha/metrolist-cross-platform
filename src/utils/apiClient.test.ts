@@ -145,3 +145,41 @@ test('Inside the native shell radio pages go straight to YouTube Music through C
   assert.equal(bodies[1].continuation, 'TOKEN=');
   assert.equal(bodies[1].playlistId, 'RDAMVMseedVideo01');
 });
+
+test('Inside the native shell one timed-out InnerTube request is retried instead of failing the search', async () => {
+  stubFetch(async () => {
+    throw new Error('fetch must not be used inside the native shell');
+  });
+  const timeouts: unknown[] = [];
+  let calls = 0;
+  g.window = {
+    Capacitor: {
+      isNativePlatform: () => true,
+      nativePromise: async (_plugin: string, _method: string, options: Record<string, unknown>) => {
+        calls++;
+        timeouts.push(options.readTimeout);
+        if (calls === 1) throw new Error('The request timed out.');
+        return {
+          status: 200,
+          data: {
+            contents: [
+              {
+                musicResponsiveListItemRenderer: {
+                  playlistItemData: { videoId: 'gdZLi9oWNZg' },
+                  flexColumns: [
+                    { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Dynamite' }] } } },
+                    { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'BTS • Dynamite • 3:19' }] } } },
+                  ],
+                },
+              },
+            ],
+          },
+        };
+      },
+    },
+  };
+  const tracks = await searchTracks('bts dynamite native retry');
+  assert.deepEqual(tracks.map((t) => t.videoId), ['gdZLi9oWNZg']);
+  assert.equal(calls, 2);
+  assert.ok(timeouts.every((t) => typeof t === 'number' && t > 0 && t <= 8000));
+});

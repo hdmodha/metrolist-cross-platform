@@ -402,11 +402,81 @@ export function buildInnerTubeNextBody(
   return body;
 }
 
-/** Performs one InnerTube POST and resolves with the decoded JSON body (rejects on HTTP errors). */
+/** Per-request options a transport honours (the retry wrapper sets the attempt timeout). */
+export interface InnerTubeRequestOptions {
+  timeoutMs?: number;
+}
+
+/**
+ * Performs one InnerTube POST and resolves with the decoded JSON body. Rejects with an
+ * `InnerTubeHttpError` when YouTube answered with a non-2xx status, with anything else on a
+ * timeout or network failure.
+ */
 export type InnerTubeTransport = (
   endpoint: InnerTubeEndpoint,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options?: InnerTubeRequestOptions
 ) => Promise<unknown>;
+
+/** YouTube Music answered, with an error status. Never retried: asking again would not help. */
+export class InnerTubeHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'InnerTubeHttpError';
+  }
+}
+
+/**
+ * Timeouts and network failures are worth one more try; an answer (an HTTP error status, or a body
+ * that is not JSON) is not.
+ */
+export function isRetryableInnerTubeError(err: unknown): boolean {
+  return !(err instanceof InnerTubeHttpError) && !(err instanceof SyntaxError);
+}
+
+export interface InnerTubeRetryOptions {
+  /** Timeout of a single attempt. */
+  attemptTimeoutMs: number;
+  /** Total time every call through this transport may take together, retries included. */
+  budgetMs: number;
+  /** Retries per call after a timeout / network failure (default 1). */
+  retries?: number;
+  /** An attempt (or a retry) is only started with at least this much budget left (default 2 s). */
+  minAttemptMs?: number;
+  now?: () => number;
+}
+
+/**
+ * Wraps a transport so that a timeout or network failure is retried once (a single slow upstream
+ * answer used to fail a whole search with 502). Every call through the returned transport shares
+ * one time budget, counted from its creation, so a search (Songs filter, then Videos filter) stays
+ * bounded: create one per logical operation.
+ */
+export function withInnerTubeRetry(transport: InnerTubeTransport, options: InnerTubeRetryOptions): InnerTubeTransport {
+  const now = options.now ?? Date.now;
+  const retries = Math.max(0, Math.floor(options.retries ?? 1));
+  const minAttemptMs = options.minAttemptMs ?? 2000;
+  const startedAt = now();
+  const remaining = () => options.budgetMs - (now() - startedAt);
+
+  return async (endpoint, body) => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const left = remaining();
+      if (left < minAttemptMs) break;
+      try {
+        return await transport(endpoint, body, { timeoutMs: Math.min(options.attemptTimeoutMs, left) });
+      } catch (err) {
+        lastError = err;
+        if (!isRetryableInnerTubeError(err)) throw err;
+      }
+    }
+    throw lastError ?? new Error('YouTube Music did not answer in time.');
+  };
+}
 
 /**
  * Searches YouTube Music, falling back from the "Songs" filter to the "Videos" filter when the

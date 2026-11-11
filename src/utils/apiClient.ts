@@ -10,16 +10,22 @@
  */
 import {
   INNERTUBE_ENDPOINT_URLS,
+  InnerTubeHttpError,
   fetchInnerTubeRadioPage,
   isValidYouTubeVideoId,
   sanitizeRadioContinuation,
   searchInnerTubeTracks,
+  withInnerTubeRetry,
   type InnerTubeParsedTrack,
   type InnerTubeTransport,
 } from './metrolistCore';
 import { LruTtlCache } from './lruCache';
 
-const REQUEST_TIMEOUT_MS = 12000;
+/** Backend requests (the server retries upstream within 16 s, so this leaves it room to answer). */
+const REQUEST_TIMEOUT_MS = 20000;
+/** One direct InnerTube attempt (native shell), and the budget of one operation, retries included. */
+const DIRECT_ATTEMPT_TIMEOUT_MS = 8000;
+const DIRECT_BUDGET_MS = 20000;
 const DEFAULT_RADIO_SEED_VIDEO_ID = 'a5uQMwRMHcs';
 
 /** Repeated searches (and artist-chip switches) are answered instantly from memory. */
@@ -94,9 +100,9 @@ function hasBackend(): boolean {
   return API_BASE_URL !== '' || !isNativeShell();
 }
 
-function withTimeout(signal?: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+function withTimeout(signal?: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS): { signal: AbortSignal; dispose: () => void } {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
   if (signal) {
     if (signal.aborted) controller.abort();
@@ -133,9 +139,10 @@ async function fetchBackendJson<T>(pathAndQuery: string, signal?: AbortSignal): 
 }
 
 /** Direct InnerTube transport: native HTTP inside the app shell, plain `fetch` otherwise. */
-const directInnerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
+const singleDirectInnerTubeRequest: InnerTubeTransport = async (endpoint, body, options) => {
   const url = INNERTUBE_ENDPOINT_URLS[endpoint];
   const cap = getCapacitor();
+  const timeoutMs = options?.timeoutMs ?? DIRECT_ATTEMPT_TIMEOUT_MS;
 
   if (isNativeShell() && typeof cap?.nativePromise === 'function') {
     const response = await cap.nativePromise('CapacitorHttp', 'request', {
@@ -144,18 +151,20 @@ const directInnerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
       headers: { 'Content-Type': 'application/json' },
       data: body,
       responseType: 'json',
-      connectTimeout: REQUEST_TIMEOUT_MS,
-      readTimeout: REQUEST_TIMEOUT_MS,
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs,
     });
     const status = typeof response?.status === 'number' ? response.status : 0;
     if (status < 200 || status >= 300) {
-      throw new Error(`YouTube Music returned ${status || 'no response'}`);
+      // Status 0 means no answer at all (a network failure, retried); anything else is an answer
+      if (status === 0) throw new Error('YouTube Music returned no response');
+      throw new InnerTubeHttpError(status, `YouTube Music returned ${status}`);
     }
     const data = response.data;
     return typeof data === 'string' ? JSON.parse(data) : data;
   }
 
-  const timeout = withTimeout();
+  const timeout = withTimeout(undefined, timeoutMs);
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -163,12 +172,20 @@ const directInnerTubeTransport: InnerTubeTransport = async (endpoint, body) => {
       body: JSON.stringify(body),
       signal: timeout.signal,
     });
-    if (!res.ok) throw new Error(`YouTube Music returned ${res.status}`);
+    if (!res.ok) throw new InnerTubeHttpError(res.status, `YouTube Music returned ${res.status}`);
     return await res.json();
   } finally {
     timeout.dispose();
   }
 };
+
+/** A fresh retrying transport per operation: one timeout / network failure is retried, within a budget. */
+function directInnerTubeTransport(): InnerTubeTransport {
+  return withInnerTubeRetry(singleDirectInnerTubeRequest, {
+    attemptTimeoutMs: DIRECT_ATTEMPT_TIMEOUT_MS,
+    budgetMs: DIRECT_BUDGET_MS,
+  });
+}
 
 /**
  * Runs `viaBackend` when a backend exists; inside the native shell falls back to (or goes
@@ -214,7 +231,7 @@ export async function searchTracks(
       );
       return Array.isArray(data.tracks) ? data.tracks : [];
     },
-    () => searchInnerTubeTracks(directInnerTubeTransport, trimmed)
+    () => searchInnerTubeTracks(directInnerTubeTransport(), trimmed)
   );
   if (tracks.length > 0) searchCache.set(cacheKey, tracks, Date.now());
   return tracks;
@@ -241,15 +258,16 @@ export async function fetchRecommendations(
       return { ...readBackendRadioPage(data), seedVideoId };
     },
     async () => {
+      const transport = directInnerTubeTransport();
       let seedVideoId = validSeed;
       if (!seedVideoId) {
         const matches = await searchInnerTubeTracks(
-          directInnerTubeTransport,
+          transport,
           `${seed.title} ${seed.artist}`.trim()
         ).catch(() => []);
         seedVideoId = matches[0]?.videoId || DEFAULT_RADIO_SEED_VIDEO_ID;
       }
-      const page = await fetchInnerTubeRadioPage(directInnerTubeTransport, seedVideoId);
+      const page = await fetchInnerTubeRadioPage(transport, seedVideoId);
       return { ...page, seedVideoId };
     }
   );
@@ -275,6 +293,6 @@ export async function fetchRadioContinuation(
           signal
         )
       ),
-    () => fetchInnerTubeRadioPage(directInnerTubeTransport, request.seedVideoId, continuation)
+    () => fetchInnerTubeRadioPage(directInnerTubeTransport(), request.seedVideoId, continuation)
   );
 }

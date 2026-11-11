@@ -376,3 +376,113 @@ test('Radio page fetcher sends the right body and parses tracks and the next tok
   assert.equal(second.continuation, null);
   assert.equal(bodies[1].continuation, decodeURIComponent(radioToken(1)));
 });
+
+/* ------------------------------- InnerTube retry on timeout / network ------------------------------- */
+
+function timeoutError(): Error {
+  const err = new Error('The operation was aborted due to timeout');
+  err.name = 'TimeoutError';
+  return err;
+}
+
+test('An InnerTube call that times out is retried once, with the attempt timeout passed on', async () => {
+  const { withInnerTubeRetry } = await import('./metrolistCore');
+  const timeouts: Array<number | undefined> = [];
+  let calls = 0;
+  const flaky = async (_endpoint: string, _body: Record<string, unknown>, options?: { timeoutMs?: number }) => {
+    calls++;
+    timeouts.push(options?.timeoutMs);
+    if (calls === 1) throw timeoutError();
+    return { ok: true };
+  };
+  const transport = withInnerTubeRetry(flaky, { attemptTimeoutMs: 8000, budgetMs: 20000, now: () => 0 });
+  assert.deepEqual(await transport('search', {}), { ok: true });
+  assert.equal(calls, 2);
+  assert.deepEqual(timeouts, [8000, 8000]);
+});
+
+test('A network error is retried once at most; an HTTP error status is never retried', async () => {
+  const { withInnerTubeRetry, InnerTubeHttpError } = await import('./metrolistCore');
+  let calls = 0;
+  const offline = withInnerTubeRetry(
+    async () => {
+      calls++;
+      throw new TypeError('fetch failed');
+    },
+    { attemptTimeoutMs: 8000, budgetMs: 20000, now: () => 0 }
+  );
+  await assert.rejects(offline('search', {}), /fetch failed/);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  const refused = withInnerTubeRetry(
+    async () => {
+      calls++;
+      throw new InnerTubeHttpError(403, 'InnerTube search upstream returned 403');
+    },
+    { attemptTimeoutMs: 8000, budgetMs: 20000, now: () => 0 }
+  );
+  await assert.rejects(refused('search', {}), /403/);
+  assert.equal(calls, 1, 'YouTube answered: asking again would not help');
+
+  // A body that is not JSON is an answer too
+  calls = 0;
+  const garbled = withInnerTubeRetry(
+    async () => {
+      calls++;
+      throw new SyntaxError('Unexpected token <');
+    },
+    { attemptTimeoutMs: 8000, budgetMs: 20000, now: () => 0 }
+  );
+  await assert.rejects(garbled('search', {}), SyntaxError);
+  assert.equal(calls, 1);
+});
+
+test('All calls through one retrying transport share a bounded time budget', async () => {
+  const { withInnerTubeRetry } = await import('./metrolistCore');
+  let clock = 0;
+  const timeouts: Array<number | undefined> = [];
+  const hanging = async (_endpoint: string, _body: Record<string, unknown>, options?: { timeoutMs?: number }) => {
+    timeouts.push(options?.timeoutMs);
+    clock += options?.timeoutMs ?? 0; // every attempt runs into its timeout
+    throw timeoutError();
+  };
+  const transport = withInnerTubeRetry(hanging, { attemptTimeoutMs: 8000, budgetMs: 16000, minAttemptMs: 2000, now: () => clock });
+  await assert.rejects(transport('search', {}));
+  assert.deepEqual(timeouts, [8000, 8000]);
+  // The budget is spent: the next call fails at once, without another upstream request
+  await assert.rejects(transport('search', {}), /did not answer in time/);
+  assert.equal(timeouts.length, 2);
+
+  // The last attempt only gets what is left of the budget, and a retry needs a useful minimum
+  clock = 0;
+  timeouts.length = 0;
+  const short = withInnerTubeRetry(hanging, { attemptTimeoutMs: 8000, budgetMs: 11000, minAttemptMs: 2000, now: () => clock });
+  await assert.rejects(short('search', {}));
+  assert.deepEqual(timeouts, [8000, 3000]);
+  clock = 0;
+  timeouts.length = 0;
+  const tooShort = withInnerTubeRetry(hanging, { attemptTimeoutMs: 8000, budgetMs: 9000, minAttemptMs: 2000, now: () => clock });
+  await assert.rejects(tooShort('search', {}));
+  assert.deepEqual(timeouts, [8000], 'no retry with only 1 s left');
+});
+
+test('One upstream timeout no longer fails a search: the Songs filter is asked again', async () => {
+  const { searchInnerTubeTracks, withInnerTubeRetry, INNERTUBE_SEARCH_FILTERS } = await import('./metrolistCore');
+  const seenParams: string[] = [];
+  let failedOnce = false;
+  const transport = async (_endpoint: string, body: Record<string, unknown>) => {
+    seenParams.push(String(body.params));
+    if (!failedOnce) {
+      failedOnce = true;
+      throw timeoutError();
+    }
+    return { contents: [videoShelfItem('yKNxeF4KMsY', 'Yellow', 'Coldplay • 1.3B views • 4:33')] };
+  };
+  const tracks = await searchInnerTubeTracks(
+    withInnerTubeRetry(transport, { attemptTimeoutMs: 8000, budgetMs: 16000, now: () => 0 }),
+    'coldplay yellow'
+  );
+  assert.equal(tracks.length, 1);
+  assert.deepEqual(seenParams, [INNERTUBE_SEARCH_FILTERS[0].params, INNERTUBE_SEARCH_FILTERS[0].params]);
+});

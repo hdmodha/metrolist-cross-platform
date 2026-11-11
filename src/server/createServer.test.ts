@@ -8,7 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { InnerTubeTransport } from '../utils/metrolistCore';
+import { InnerTubeHttpError, type InnerTubeTransport } from '../utils/metrolistCore';
 import { startMetrolistServer, type MetrolistServerOptions, type RunningMetrolistServer } from './createServer';
 
 interface Reply {
@@ -194,6 +194,46 @@ describe('web mode', () => {
       assert.ok(calls.length > 0 && calls.every((c) => c === 'search'));
       const bad = await request(server.port, '/api/innertube/recommendations?videoId=abc&continuation=%3Cscript%3E');
       assert.equal(bad.status, 400);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe('upstream retry', () => {
+  test('one InnerTube timeout or network failure is retried instead of failing the search with 502', async () => {
+    let calls = 0;
+    const transport: InnerTubeTransport = async (_endpoint, _body, options) => {
+      calls++;
+      assert.ok(options?.timeoutMs && options.timeoutMs <= 8000, 'every attempt has a timeout');
+      if (calls === 1) {
+        const err = new Error('The operation was aborted due to timeout');
+        err.name = 'TimeoutError';
+        throw err;
+      }
+      return {};
+    };
+    const server = await start({ mode: 'web', innerTubeTransport: transport });
+    try {
+      const reply = await request(server.port, '/api/innertube/search?q=bts%20dynamite');
+      assert.equal(reply.status, 200);
+      assert.ok(calls >= 2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test('an HTTP error answer from YouTube is not retried', async () => {
+    let calls = 0;
+    const transport: InnerTubeTransport = async () => {
+      calls++;
+      throw new InnerTubeHttpError(403, 'InnerTube next upstream returned 403');
+    };
+    const server = await start({ mode: 'web', innerTubeTransport: transport });
+    try {
+      const reply = await request(server.port, '/api/innertube/recommendations?videoId=dQw4w9WgXcQ');
+      assert.equal(reply.status, 502);
+      assert.equal(calls, 1);
     } finally {
       await server.close();
     }
