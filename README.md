@@ -1,6 +1,6 @@
 # Metrolist — Cross-Platform Ad-Free Music Player
 
-A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, Android, and Web**, powered by **YouTube Music (`InnerTube WEB_REMIX`)** and **YouTube Radio (`RDAMVM`) recommendations**.
+A fast, Spotify-inspired open-source music player for **macOS, Windows, Linux, iOS, Android, and Web**, powered by **YouTube Music (`InnerTube WEB_REMIX`)** and **YouTube Radio (`RDAMVM`) recommendations**.
 
 ---
 
@@ -8,12 +8,13 @@ A fast, Spotify-inspired open-source music player for **macOS, Windows, iOS, And
 
 Download the latest builds from the **[GitHub Releases](../../releases)** page:
 - **macOS** (Apple Silicon and Intel, one download): `Metrolist-<version>-mac-universal.dmg`
-- **Windows** (64-bit): `Metrolist-<version>-win-x64-setup.exe`
-- **Android**: `metrolist-android-universal.apk` (install directly on any Android device)
-- **iOS / iPadOS**: `metrolist-ios-xcode-project.zip` (sideload via Xcode / AltStore, or install as an iOS Home Screen Web App)
+- **Windows** (64-bit Intel / AMD): `Metrolist-<version>-win-x64-setup.exe`; Windows on ARM (Snapdragon): `Metrolist-<version>-win-arm64-setup.exe`
+- **Linux**: `Metrolist-<version>-linux-x86_64.AppImage` or `-linux-arm64.AppImage` (any distribution), `Metrolist-<version>-linux-amd64.deb` or `-linux-arm64.deb` (Debian, Ubuntu, Mint, …)
+- **Android**: `Metrolist-<version>-android.apk` (signed release: installs over the previous version) or `Metrolist-<version>-android-debug.apk` (throw-away key: uninstall the previous version first). The `.aab` is for Google Play.
+- **iOS / iPadOS**: `Metrolist-<version>-ios-unsigned.ipa`, unsigned: sideload it with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io), which sign it with your own Apple ID (untested on a device yet). The prepared Xcode project is `metrolist-ios-xcode-project.zip`; an iOS Home Screen Web App also works.
 - **Portable Web & Server** (any OS with [Node.js](https://nodejs.org) 20.19 or newer): `metrolist-portable-web-and-server.zip`. Unzip it, open a terminal in the folder and run `npm start` (or `node dist-server/server.mjs`), then open http://localhost:3000. No `npm install` is needed: the server is a single bundled file. Set `PORT` to use another port.
 
-The macOS and Windows apps need no Node.js, terminal or browser: the whole app, including its small server, runs inside them.
+The macOS, Windows and Linux apps need no Node.js, terminal or browser: the whole app, including its small server, runs inside them.
 
 ### macOS
 
@@ -29,10 +30,17 @@ Closing the window keeps the music playing (like Music or Spotify); click the Do
 
 ### Windows
 
-1. Run `Metrolist-<version>-win-x64-setup.exe`. It installs for your user only (no administrator rights) and adds Start-menu and desktop shortcuts.
+1. Run `Metrolist-<version>-win-x64-setup.exe` (or `-win-arm64-setup.exe` on a Windows on ARM PC). It installs for your user only (no administrator rights) and adds Start-menu and desktop shortcuts.
 2. The installer is not code-signed, so **Microsoft Defender SmartScreen** may say *"Windows protected your PC"*: click **More info → Run anyway**.
 
 To uninstall: **Settings → Apps → Installed apps → Metrolist → Uninstall**.
+
+### Linux
+
+- **AppImage** (any distribution): make the file executable (`chmod +x Metrolist-<version>-linux-x86_64.AppImage`) and run it. If it does not start, try `--no-sandbox`.
+- **Debian / Ubuntu / Mint**: `sudo apt install ./Metrolist-<version>-linux-amd64.deb` (use `-arm64` on ARM).
+
+The packages are built and smoke-tested on x64 only; the arm64 builds have not been run on a device.
 
 ### Updating
 
@@ -131,6 +139,19 @@ For device tests there is a hidden log of the last 100 player, page and plugin e
 | **Desktop app** (macOS, Windows, Linux) | Yes, also minimised or hidden (macOS: closing the window hides it) | OS media keys / controls | Yes |
 | **Desktop browsers** | Yes while the tab stays open (a background tab keeps playing) | Browser media controls | Use the browser's blocker |
 | **Mobile browsers** | **No**: when you switch apps or lock the phone, the browser and YouTube pause a background tab, and a web page cannot prevent it. Install the Android / iOS app for background play. | While the tab is in front | Use the browser's blocker |
+
+---
+
+## Release signing (Android)
+
+The release workflow signs the APK and `.aab` only when these repository secrets exist (GitHub → Settings → Secrets and variables → Actions); without them it ships a debug APK. Create the keystore once:
+
+```bash
+keytool -genkeypair -v -keystore metrolist-release.keystore -alias metrolist -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 metrolist-release.keystore     # macOS: base64 -i metrolist-release.keystore
+```
+
+Save the base64 output as the secret `ANDROID_KEYSTORE_BASE64`; the passwords and alias go into `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`. Keep the keystore file and its passwords safe and backed up: losing them means users must uninstall Metrolist before they can install a new release. Never commit the keystore.
 
 ---
 
