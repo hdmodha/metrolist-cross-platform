@@ -122,6 +122,7 @@ export default function App() {
     isPlaying: state.isPlaying,
     likedIds: likedSet,
     downloadedIds: downloadedSet,
+    unplayableTracks: state.unplayableTracks,
   };
 
   let page: React.ReactNode;
@@ -221,6 +222,7 @@ export default function App() {
             track={activeTrack}
             clock={clock}
             queue={queueTracks}
+            unplayableTracks={state.unplayableTracks}
             isPlaying={state.isPlaying}
             isLoading={player.isStreamLoading}
             liked={liked}

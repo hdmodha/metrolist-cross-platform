@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyStreamError, isContentRestriction, unplayableNotice } from './streamErrors';
+import { classifyStreamError, isContentRestriction, unplayableNotice, unplayableShortReason } from './streamErrors';
 
 test('YouTube IFrame error codes map to a reason and a recovery', () => {
   assert.deepEqual(classifyStreamError(2), { reason: 'invalidVideo', recovery: 'alternate' });
@@ -37,4 +37,14 @@ test('the notice says whether the song is being skipped, was jumped over, or a t
   assert.equal(unplayableNotice('Iris', 'embedDisabled'), '“Iris” can’t be played outside YouTube: its owner turned that off. Skipping…');
   assert.equal(unplayableNotice('Iris', 'embedDisabled', 'skipped'), '“Iris” can’t be played outside YouTube: its owner turned that off. Skipped.');
   assert.equal(unplayableNotice('Iris', 'embedDisabled', 'none'), '“Iris” can’t be played outside YouTube: its owner turned that off.');
+});
+
+test('the short reason on an unavailable song is one honest line per reason', () => {
+  assert.equal(unplayableShortReason('embedDisabled'), 'Its owner doesn’t allow playback outside YouTube');
+  assert.equal(unplayableShortReason('unavailable'), 'Removed from YouTube or private');
+  assert.equal(unplayableShortReason('invalidVideo'), 'No playable video on YouTube');
+  assert.equal(unplayableShortReason('playerError'), 'Can’t be played here');
+  assert.equal(unplayableShortReason('embedderRejected'), 'Can’t be played here');
+  assert.equal(unplayableShortReason('unknown'), 'Can’t be played here');
+  assert.equal(unplayableShortReason(), 'Can’t be played here');
 });

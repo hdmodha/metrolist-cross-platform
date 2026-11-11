@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 import http from 'node:http';
 import fs from 'node:fs';
 import { MetrolistApp } from '../e2e/fixtures/test';
-import { APP_URL, launchDesktopApp, makeProfileDir, runSecondInstance, type DesktopApp } from './desktopApp';
+import { RECENT_SEARCHES_KEY, V2_KEY, songs, v2Storage } from '../e2e/fixtures/storage';
+import { APP_URL, LEGACY_URL, launchDesktopApp, makeProfileDir, runSecondInstance, type DesktopApp } from './desktopApp';
 
 type OpenedLinks = { __openedExternally?: string[] };
 
@@ -59,7 +60,7 @@ function openedExternally(app: DesktopApp): Promise<string[]> {
   return app.electronApp.evaluate(() => (globalThis as OpenedLinks).__openedExternally ?? []);
 }
 
-test('opens one window on http://127.0.0.1:47823/ titled Metrolist, with the app shell', async () => {
+test('opens one window on http://localhost:47823/ titled Metrolist, with the app shell', async () => {
   const app = await launch(newProfile());
   expect(app.page.url()).toBe(APP_URL);
   const info = await mainWindowInfo(app);
@@ -173,6 +174,49 @@ test('liked songs survive a restart (same origin every launch)', async () => {
   await again.openCollection('Liked Songs');
   await expect.poll(() => again.titlesIn(again.main)).toEqual([liked]);
   await close(second);
+});
+
+/** Writes `entries` into the localStorage of `url`'s origin, from the main process (test set-up only). */
+function seedOrigin(app: DesktopApp, url: string, entries: Record<string, string>): Promise<void> {
+  return app.electronApp.evaluate(async ({ BrowserWindow }, { url, entries }) => {
+    const win = new BrowserWindow({ show: false });
+    await win.loadURL(url + 'manifest.webmanifest');
+    await win.webContents.executeJavaScript(
+      `(() => { const e = ${JSON.stringify(entries)}; for (const k of Object.keys(e)) localStorage.setItem(k, e[k]); })()`
+    );
+    win.destroy();
+  }, { url, entries });
+}
+
+test('saved data of an earlier version (on 127.0.0.1) is moved to the new origin once, never over newer data', async () => {
+  const profile = newProfile();
+  const liked = songs('daft punk', 3);
+  const first = await launch(profile);
+  // What version 1.1.0 left under the old origin
+  await seedOrigin(first, LEGACY_URL, { ...v2Storage({ liked }), [RECENT_SEARCHES_KEY]: JSON.stringify(['old search']) });
+  // The new origin as an upgrade finds it: the app page (which saves its state) is gone, its data
+  // cleared, and one newer entry is there already
+  await first.page.goto(APP_URL + 'manifest.webmanifest');
+  await first.electronApp.evaluate(({ session }, origin) => session.defaultSession.clearStorageData({ origin, storages: ['localstorage'] }), APP_URL.slice(0, -1));
+  await first.page.evaluate((key) => localStorage.setItem(key, JSON.stringify(['new search'])), RECENT_SEARCHES_KEY);
+  await close(first);
+  // As if this profile had never run the new version: the move happens on the next start
+  fs.rmSync(`${profile}/origin-migration.json`);
+
+  const second = await launch(profile);
+  const app = new MetrolistApp(second.page);
+  await app.openCollection('Liked Songs');
+  await expect.poll(() => app.titlesIn(app.main)).toEqual(liked.map((t) => t.title));
+  expect(await second.page.evaluate((key) => localStorage.getItem(key), RECENT_SEARCHES_KEY)).toBe(JSON.stringify(['new search']));
+  expect(JSON.parse(fs.readFileSync(`${profile}/origin-migration.json`, 'utf8'))).toEqual({ migratedPorts: [47823] });
+  // Moved once: the old origin keeps its copy, and a later change there is not copied again
+  await seedOrigin(second, LEGACY_URL, { [V2_KEY]: JSON.stringify({ version: 2, broken: true }) });
+  await close(second);
+  const third = await launch(profile);
+  const again = new MetrolistApp(third.page);
+  await again.openCollection('Liked Songs');
+  await expect.poll(() => again.titlesIn(again.main)).toEqual(liked.map((t) => t.title));
+  await close(third);
 });
 
 test('the server rejects a request for another host name (DNS rebinding)', async () => {

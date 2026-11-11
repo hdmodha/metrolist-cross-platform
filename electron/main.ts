@@ -4,8 +4,10 @@
  * The Express server (`src/server/createServer.ts`, desktop mode) runs inside this process on
  * 127.0.0.1 at a FIXED preferred port (`policies/ports.ts`): localStorage — liked songs, downloads,
  * the queue — is per origin, so the origin must not change between launches. The window loads
- * `http://127.0.0.1:<port>/` over plain http (not a custom `app://` scheme), because YouTube's embedded
- * player needs a normal http(s) origin / referrer.
+ * `http://localhost:<port>/` over plain http (not a custom `app://` scheme), because YouTube's embedded
+ * player needs a normal http(s) origin / referrer, and refuses some videos for an IP-address host
+ * (`policies/appOrigin.ts`; data saved under `127.0.0.1` by earlier versions is moved once,
+ * `storageMigration.ts`).
  *
  * Ad and tracking requests (the YouTube player's included) are cancelled in the session
  * (`adBlocker.ts`, rules in `src/shared/adBlock.ts`).
@@ -21,11 +23,13 @@ import { startMetrolistServer, type FrontendMiddleware, type RunningMetrolistSer
 import { installAdBlocker, type AdBlocker } from './adBlocker';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 import { createMainWindow } from './mainWindow';
+import { appUrl } from './policies/appOrigin';
 import { installMenu } from './menu';
 import { PREFERRED_PORT, listenOnPreferredPort, shouldShowPortNotice } from './policies/ports';
 import { isSmokeTestEnabled } from './policies/smokeTest';
 import { applyNavigationPolicy, applyPermissionPolicy } from './security';
 import { armSmokeTestTimeout, finishSmokeTest, runSmokeTest } from './smokeRunner';
+import { migrateLegacyStorage } from './storageMigration';
 
 const APP_USER_MODEL_ID = 'com.metrolist.music';
 const isMac = process.platform === 'darwin';
@@ -46,13 +50,17 @@ if (smokeTest) {
 let mainWindow: BrowserWindow | null = null;
 let server: RunningMetrolistServer | null = null;
 let appOrigin = '';
+/** The page URL (`http://localhost:<port>/`). */
+let pageUrl = '';
+/** Saved data of the old origin, lent to the server during the one-time move (`storageMigration.ts`). */
+let legacyStorage: Record<string, string> | null = null;
 let quitting = false;
 let adBlocker: AdBlocker | null = null;
 
 function showMainWindow(): void {
   if (!server) return;
   if (!mainWindow || mainWindow.isDestroyed()) {
-    openMainWindow(server.url);
+    openMainWindow(pageUrl);
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -60,7 +68,8 @@ function showMainWindow(): void {
   mainWindow.focus();
 }
 
-function openMainWindow(url: string): BrowserWindow {
+/** Opens the window (hidden until its first paint); it loads `url` once `ready` settles. */
+function openMainWindow(url: string, ready: Promise<void> = Promise.resolve()): BrowserWindow {
   const win = createMainWindow(app.getPath('userData'));
   mainWindow = win;
   win.on('close', (event) => {
@@ -78,8 +87,16 @@ function openMainWindow(url: string): BrowserWindow {
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
   });
-  void win.loadURL(url);
+  void ready.then(() => {
+    if (!win.isDestroyed()) void win.loadURL(url);
+  });
   return win;
+}
+
+function takeLegacyStorage(): Record<string, string> | null {
+  const entries = legacyStorage;
+  legacyStorage = null;
+  return entries;
 }
 
 async function startServer(): Promise<{ server: RunningMetrolistServer; usedFallback: boolean }> {
@@ -90,7 +107,7 @@ async function startServer(): Promise<{ server: RunningMetrolistServer; usedFall
   }
   const distPath = path.join(app.getAppPath(), 'dist');
   const choice = await listenOnPreferredPort((port) =>
-    startMetrolistServer({ mode: 'desktop', port, distPath, frontend })
+    startMetrolistServer({ mode: 'desktop', port, distPath, frontend, takeLegacyStorage })
   );
   if (choice.usedFallback) {
     console.warn(
@@ -127,12 +144,23 @@ async function start(): Promise<void> {
 
   const started = await startServer();
   server = started.server;
-  appOrigin = new URL(server.url).origin;
-  console.log(`[metrolist] serving ${server.url}`);
+  pageUrl = appUrl(server.port);
+  appOrigin = new URL(pageUrl).origin;
+  console.log(`[metrolist] serving ${pageUrl}`);
 
-  const win = openMainWindow(server.url);
+  // Before the page reads its saved state. The main window exists meanwhile (hidden), so closing the
+  // move's hidden windows never looks like "all windows closed" (which quits on Windows / Linux)
+  const moved = migrateLegacyStorage(app.getPath('userData'), server.port, {
+    lend: (entries) => {
+      legacyStorage = entries;
+    },
+    revoke: () => {
+      legacyStorage = null;
+    },
+  });
+  const win = openMainWindow(pageUrl, moved);
   if (smokeTest) {
-    void runSmokeTest(win, server.url);
+    void runSmokeTest(win, pageUrl);
   } else if (started.usedFallback) {
     win.once('ready-to-show', () => noticeFallbackPort(win, server?.port ?? 0));
   }

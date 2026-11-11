@@ -67,6 +67,11 @@ export interface MetrolistServerOptions {
   innerTubeTransport?: InnerTubeTransport;
   /** Replaces the oEmbed request; resolves with the HTTP status (tests). */
   oEmbedStatus?: OEmbedStatusFetcher;
+  /**
+   * Desktop only: hands out, once, the data an earlier version saved under the old page origin
+   * (`electron/storageMigration.ts`), at `GET /api/desktop/legacy-storage`; `null` when there is none.
+   */
+  takeLegacyStorage?: () => Record<string, string> | null;
 }
 
 /** One oEmbed GET; resolves with the HTTP status, rejects on a timeout / network failure. */
@@ -212,6 +217,20 @@ export function createMetrolistApp(options: Omit<MetrolistServerOptions, 'port' 
         return;
       }
       next();
+    });
+  }
+
+  if (mode === 'desktop' && options.takeLegacyStorage) {
+    const takeLegacyStorage = options.takeLegacyStorage;
+    // Read once by the migration's hidden page on the new origin (`localhost`): nothing is cached,
+    // and a request for the old host name gets nothing (it is the source, not the target)
+    app.get('/api/desktop/legacy-storage', (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.headers.host !== `localhost:${req.socket.localPort ?? 0}`) {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+      }
+      res.json({ entries: takeLegacyStorage() ?? {} });
     });
   }
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import type { MetrolistTrack } from '../data/track';
+import type { UnplayableReason } from '../player/streamErrors';
 import { SongCard } from './SongCard';
 import { SongRow } from './SongRow';
 
@@ -9,6 +10,8 @@ export interface ListStatus {
   isPlaying: boolean;
   likedIds: ReadonlySet<string>;
   downloadedIds: ReadonlySet<string>;
+  /** Songs the player found it cannot play (shown as unavailable). */
+  unplayableTracks: Readonly<Record<string, UnplayableReason>>;
 }
 
 interface SongListProps extends ListStatus {
@@ -18,7 +21,7 @@ interface SongListProps extends ListStatus {
 }
 
 /** A vertical list of `SongRow`s. */
-export function SongList({ tracks, onPlay, label, activeTrackId, isPlaying, likedIds, downloadedIds }: SongListProps) {
+export function SongList({ tracks, onPlay, label, activeTrackId, isPlaying, likedIds, downloadedIds, unplayableTracks }: SongListProps) {
   return (
     <ul aria-label={label} className="-mx-2">
       {tracks.map((track) => {
@@ -31,6 +34,7 @@ export function SongList({ tracks, onPlay, label, activeTrackId, isPlaying, like
             isPlaying={isCurrent && isPlaying}
             liked={likedIds.has(track.id)}
             downloaded={downloadedIds.has(track.id)}
+            unavailableReason={unplayableTracks[track.id]}
             onPlay={onPlay}
           />
         );
@@ -40,7 +44,7 @@ export function SongList({ tracks, onPlay, label, activeTrackId, isPlaying, like
 }
 
 /** The `SongCard`s of a shelf (render inside `<Shelf>`). */
-export function SongCards({ tracks, onPlay, activeTrackId, isPlaying, likedIds, downloadedIds }: Omit<SongListProps, 'label'>) {
+export function SongCards({ tracks, onPlay, activeTrackId, isPlaying, likedIds, downloadedIds, unplayableTracks }: Omit<SongListProps, 'label'>) {
   return (
     <>
       {tracks.map((track) => {
@@ -53,6 +57,7 @@ export function SongCards({ tracks, onPlay, activeTrackId, isPlaying, likedIds, 
             isPlaying={isCurrent && isPlaying}
             liked={likedIds.has(track.id)}
             downloaded={downloadedIds.has(track.id)}
+            unavailableReason={unplayableTracks[track.id]}
             onPlay={onPlay}
           />
         );

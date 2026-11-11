@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown, ListMusic } from 'lucide-react';
 import { useAppActions } from '../app/AppActionsContext';
+import type { UnplayableReason } from '../player/streamErrors';
 import type { MetrolistTrack } from '../data/track';
 import type { PlaybackClock } from '../player/playbackClock';
 import type { PlaySource } from '../player/playerCore';
@@ -32,6 +33,8 @@ interface NowPlayingProps {
   track: MetrolistTrack;
   clock: PlaybackClock;
   queue: MetrolistTrack[];
+  /** Songs the player found it cannot play (marked in the queue). */
+  unplayableTracks: Readonly<Record<string, UnplayableReason>>;
   isPlaying: boolean;
   isLoading: boolean;
   liked: boolean;
@@ -57,6 +60,7 @@ export const NowPlaying = React.memo(function NowPlaying({
   track,
   clock,
   queue,
+  unplayableTracks,
   isPlaying,
   isLoading,
   liked,
@@ -279,6 +283,7 @@ export const NowPlaying = React.memo(function NowPlaying({
           <QueueSheet
             id={queueId}
             queue={queue}
+            unplayableTracks={unplayableTracks}
             activeTrackId={track.id}
             isPlaying={isPlaying}
             autoplayRadio={autoplayRadio}

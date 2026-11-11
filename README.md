@@ -45,7 +45,7 @@ Liked songs, downloads, history, the queue, preferences and the window size and 
 - Windows: `%APPDATA%\Metrolist`
 - Linux (from source): `~/.config/Metrolist`
 
-Uninstalling keeps this folder; delete it to start fresh. The library belongs to the app's local address, `http://127.0.0.1:47823`. If another program holds that port, Metrolist starts on a fallback port and tells you that your saved music is not shown in that session.
+Uninstalling keeps this folder; delete it to start fresh. The library belongs to the app's local address, `http://localhost:47823`. Earlier versions used 127.0.0.1; your saved library is moved over once on the first start. If another program holds that port, Metrolist starts on a fallback port and tells you that your saved music is not shown in that session.
 
 ---
 
@@ -70,7 +70,7 @@ Uninstalling keeps this folder; delete it to start fresh. The library belongs to
 - **Phones and tablets** (narrower than 1024 px): bottom tabs, a docked mini player, full-screen Now Playing with swipe-down to close. Landscape phones get a compact two-column Now Playing.
 - **Desktop and large windows** (1024 px and wider): a sidebar with shortcuts to Liked Songs and Downloads, and a full-width player bar with volume and a queue button.
 - **Packaged Android / iOS app**: searches YouTube Music directly from the device through Capacitor's native HTTP bridge — no server needed. The Android Back button follows the app's navigation (closes Now Playing, steps back through pages). Both apps keep playing in the background and block ads (below; iOS is not yet tested on a device).
-- **Desktop app (Electron)**: the same app in its own window; the server runs inside the app on `127.0.0.1` only. Closing the window on macOS keeps the music playing (Cmd+Q quits); media keys work through the OS media controls.
+- **Desktop app (Electron)**: the same app in its own window; the server runs inside the app on `127.0.0.1` only, and the app's page is at `localhost` (earlier versions used 127.0.0.1; your saved library is moved over once on the first start). Closing the window on macOS keeps the music playing (Cmd+Q quits); media keys work through the OS media controls.
 - **Web / portable bundle**: talk to the bundled Express server (`dist-server/server.mjs`, built from `server.ts`), or to any deployed one via `VITE_API_BASE_URL`.
 
 ### Ad blocking per platform

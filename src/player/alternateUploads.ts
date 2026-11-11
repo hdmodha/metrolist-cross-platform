@@ -12,7 +12,14 @@
  *   reach the minimum score: the same title from an unrelated channel is often an unlabelled cover;
  * - duration (when both are known): within 15 s 25 points, fading to 0 at 60 s, rejected beyond;
  * - minus 50 for every kind of version marker (cover, remix, live / TV performance, dance
- *   practice, …) only one of the two titles has.
+ *   practice, chipmunk, lo-fi, acoustic, reprise, bass boosted, …) only one of the two titles has.
+ *
+ * Credit lists: an artist credit can name several people ("A, B & C", "A feat. B", "A x B"); the full
+ * compact credit and each individual name (4+ letters) all count as the artist's names.
+ * Segments: Bollywood-style titles are "Song | Movie | Cast | Singers" or "Song - Movie - Singers -
+ * 320Kbps"; a segmented title is compared by its first `|` / dash / bullet segment that is not
+ * only artist names or noise words (later segments are the movie, cast or singers, so another song
+ * of the same movie never matches on them). Noise words (official, lyrical, full, song, kbps, …) are ignored.
  * Anything under `MIN_ALTERNATE_SCORE` is never played: skipping is better than a wrong song.
  */
 import type { InnerTubeParsedTrack } from '../utils/metrolistCore';
@@ -66,10 +73,31 @@ const VERSION_MARKERS: Record<string, string> = {
   practice: 'dance',
   choreography: 'dance',
   mirrored: 'dance',
+  chipmunk: 'chipmunk',
+  chipmunks: 'chipmunk',
+  chipmunked: 'chipmunk',
+  lofi: 'lofi',
+  acoustic: 'acoustic',
+  unplugged: 'live',
+  reprise: 'reprise',
+  female: 'female',
+  male: 'male',
+  ringtone: 'ringtone',
+  teaser: 'teaser',
+  trailer: 'teaser',
+  reverbed: 'reverb',
 };
 
 /** Words that say nothing about which song it is. */
-const NOISE_WORDS = new Set(['official', 'video', 'audio', 'lyrics', 'lyric', 'hd', 'hq', 'mv', 'visualizer', 'ft', 'feat', 'featuring']);
+const NOISE_WORDS = new Set(['official', 'video', 'audio', 'lyrics', 'lyric', 'hd', 'hq', 'mv', 'visualizer', 'ft', 'feat', 'featuring',
+  'full', 'song', 'songs', 'lyrical', 'kbps', '320kbps', '128kbps', '256kbps',
+]);
+
+/** Separators of an artist credit list; the word-like ones need spaces around them. */
+const CREDIT_SEPARATORS = [',', '&', '/', '+', ' x ', ' and ', ' feat. ', ' feat ', ' ft. ', ' ft ', ' featuring ', ' with '];
+const MIN_INDIVIDUAL_NAME_LENGTH = 4;
+/** Separators of the parts of a title ("Song | Movie", "Song - Singers"). */
+const SEGMENT_SEPARATORS = ['|', ' - ', ' \u2013 ', ' \u2014 ', ' \u2022 '];
 
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
@@ -111,10 +139,54 @@ function compactArtist(name: string): string {
   return compact;
 }
 
-/** The two sides of an "A - B" title (brackets removed), or none. */
+/** Splits `text` at every separator (case-insensitive, one pass). */
+function splitOn(text: string, separators: readonly string[]): string[] {
+  const capped = text.slice(0, MAX_TEXT_LENGTH);
+  const lower = capped.toLowerCase();
+  const parts: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < lower.length) {
+    let matched = 0;
+    for (const sep of separators) {
+      if (lower.startsWith(sep, i)) {
+        matched = sep.length;
+        break;
+      }
+    }
+    if (matched > 0 && lower.length === capped.length) {
+      parts.push(capped.slice(start, i));
+      i += matched;
+      start = i;
+    } else {
+      i++;
+    }
+  }
+  parts.push(capped.slice(start));
+  return parts;
+}
+
+/** Compact names of an artist credit: the whole credit, then each listed person (4+ letters). */
+function creditNames(credit: string): string[] {
+  const names = [compactArtist(credit)];
+  const parts = splitOn(credit, CREDIT_SEPARATORS);
+  if (parts.length > 1) {
+    for (const part of parts) {
+      const compact = compactArtist(part);
+      if (compact.length >= MIN_INDIVIDUAL_NAME_LENGTH && !names.includes(compact)) names.push(compact);
+    }
+  }
+  return names;
+}
+
+/** The two sides of an "A - B" title (first " - ", " \u2013 " or " \u2014 "; brackets removed), or none. */
 function dashSides(title: string): string[] {
   const stripped = withoutBrackets(title);
-  const dash = stripped.indexOf(' - ');
+  let dash = -1;
+  for (const sep of [' - ', ' \u2013 ', ' \u2014 ']) {
+    const at = stripped.indexOf(sep);
+    if (at > 0 && (dash < 0 || at < dash)) dash = at;
+  }
   return dash > 0 ? [stripped.slice(0, dash), stripped.slice(dash + 3)] : [];
 }
 
@@ -127,9 +199,30 @@ function diceSimilarity(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
 
 /** Title words without brackets, noise words and artist names (unless nothing else is left). */
 function titleWords(title: string, artistWords: ReadonlySet<string>): Set<string> {
-  const all = words(withoutBrackets(title)).filter((w) => !NOISE_WORDS.has(w));
+  const raw = words(withoutBrackets(title));
+  const meaningful = raw.filter((w) => !NOISE_WORDS.has(w));
+  // A title made only of noise words ("Song") keeps them
+  const all = meaningful.length > 0 ? meaningful : raw;
   const core = all.filter((w) => !artistWords.has(w));
   return new Set(core.length > 0 ? core : all);
+}
+
+/**
+ * The words that name the song: a segmented title's first segment that says something besides
+ * artist names and noise ("Lyrical | Humsafar Song | Saiyaara | Cast | Singers" → humsafar), else
+ * the whole title. Later segments are the movie, cast or singers: another song of the same movie
+ * by the same singers must not match on them.
+ */
+function songNameWords(title: string, artistWords: ReadonlySet<string>): Set<string> {
+  const stripped = withoutBrackets(title);
+  const segments = splitOn(stripped, SEGMENT_SEPARATORS);
+  if (segments.length > 1) {
+    for (const segment of segments) {
+      const core = words(segment).filter((w) => !NOISE_WORDS.has(w) && !artistWords.has(w));
+      if (core.length > 0) return new Set(core);
+    }
+  }
+  return titleWords(stripped, artistWords);
 }
 
 function markersOf(title: string): Set<string> {
@@ -139,6 +232,8 @@ function markersOf(title: string): Set<string> {
     const marker = Object.prototype.hasOwnProperty.call(VERSION_MARKERS, list[i]) ? VERSION_MARKERS[list[i]] : undefined;
     if (marker) found.add(marker);
     if (list[i] === 'speed' && list[i + 1] === 'up') found.add('sped');
+    if (list[i] === 'lo' && list[i + 1] === 'fi') found.add('lofi');
+    if (list[i] === 'bass' && list[i + 1] === 'boosted') found.add('bassboost');
   }
   return found;
 }
@@ -158,14 +253,16 @@ export function scoreAlternateUpload(original: AlternateOriginal, candidate: Inn
   // Who is named as the artist: the uploaders, plus a side of an "Artist - Title" / "Title - Artist"
   // title that is exactly an uploader's name (`Kavinsky - Nightcall` uploaded by `Kavinsky - Topic`),
   // or both sides when the two titles are the same "A - B" pair (two re-uploads, in either order)
-  const uploaders = [compactArtist(original.artist), compactArtist(candidate.artist)].filter((n) => n.length >= 2);
+  const originalCredit = creditNames(original.artist);
+  const candidateCredit = creditNames(candidate.artist);
+  const uploaders = [...originalCredit, ...candidateCredit].filter((n) => n.length >= 2);
   const originalSides = dashSides(original.title);
   const candidateSides = dashSides(candidate.title);
   const sideKey = (sides: string[]) => sides.map(compactArtist).sort().join(' ');
   const samePair = originalSides.length === 2 && sideKey(originalSides) === sideKey(candidateSides);
   const artistWords = new Set([...words(original.artist), ...words(candidate.artist)]);
-  const namesOf = (track: AlternateOriginal, sides: string[]) => {
-    const names = [compactArtist(track.artist)];
+  const namesOf = (credit: string[], sides: string[]) => {
+    const names = [...credit];
     for (const side of sides) {
       const compact = compactArtist(side);
       if (compact.length >= 2 && (samePair || uploaders.includes(compact))) {
@@ -175,10 +272,10 @@ export function scoreAlternateUpload(original: AlternateOriginal, candidate: Inn
     }
     return names.filter((n) => n.length >= 2);
   };
-  const originalArtists = namesOf(original, originalSides);
-  const candidateArtists = namesOf(candidate, candidateSides);
+  const originalArtists = namesOf(originalCredit, originalSides);
+  const candidateArtists = namesOf(candidateCredit, candidateSides);
 
-  const similarity = diceSimilarity(titleWords(original.title, artistWords), titleWords(candidate.title, artistWords));
+  const similarity = diceSimilarity(songNameWords(original.title, artistWords), songNameWords(candidate.title, artistWords));
   if (similarity < MIN_TITLE_SIMILARITY) return null;
   let score = TITLE_WEIGHT * similarity;
 
