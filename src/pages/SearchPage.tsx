@@ -1,5 +1,6 @@
 import React from 'react';
 import { History, LoaderCircle, RotateCw, Search, X } from 'lucide-react';
+import { registerSearchInput } from '../app/navigationMemory';
 import { historyFlags, navigate } from '../app/router';
 import { BROWSE_TILES } from '../data/browse';
 import { toMetrolistTrack } from '../player/playerCore';
@@ -56,13 +57,6 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
   const { search, rerun } = useTrackSearch(query);
   const recent = useRecentSearches();
 
-  // A query that arrives from outside (Back / Forward, a browse tile, "Go to artist") fills the box
-  React.useEffect(() => {
-    if (query === committedRef.current) return;
-    committedRef.current = query;
-    setText(query);
-  }, [query]);
-
   const cancelDebounce = () => {
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
@@ -70,6 +64,21 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
     }
   };
   React.useEffect(() => cancelDebounce, []);
+
+  // A query that arrives from outside (Back / Forward, a browse tile, "Go to artist", re-tapping the
+  // tab) fills the box and wins over a half-typed one
+  React.useEffect(() => {
+    if (query === committedRef.current) return;
+    committedRef.current = query;
+    cancelDebounce();
+    setText(query);
+  }, [query]);
+
+  // Re-tapping the Search tab focuses this box (synchronously, inside the tap)
+  React.useEffect(() => {
+    registerSearchInput(inputRef.current);
+    return () => registerSearchInput(null);
+  }, []);
 
   /** Puts `value` in the URL (push from the empty page, replace while refining). */
   const commit = (value: string) => {

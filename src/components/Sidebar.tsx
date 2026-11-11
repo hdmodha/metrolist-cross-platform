@@ -1,6 +1,8 @@
 import React from 'react';
 import { Download, Heart } from 'lucide-react';
+import { getTabMemory } from '../app/navigationMemory';
 import type { Route } from '../app/router';
+import { TAB_ROOTS, tabTarget } from '../app/tabMemory';
 import { countRender } from '../utils/renderProbe';
 import { MAIN_TABS } from './BottomNav';
 import { NavLink } from './NavLink';
@@ -13,9 +15,13 @@ interface SidebarProps {
 
 export const songCount = (n: number) => `${n} ${n === 1 ? 'song' : 'songs'}`;
 
-/** Desktop: brand, Home / Search / Library, then the Liked Songs and Downloads shortcuts. */
+/**
+ * Desktop: brand, Home / Search / Library (tab rules, like the bottom tabs), then the Liked Songs
+ * and Downloads shortcuts (chrome too: they return to the page where it was left).
+ */
 export const Sidebar = React.memo(function Sidebar({ route, likedCount, downloadedCount }: SidebarProps) {
   countRender('Sidebar');
+  const memory = getTabMemory();
   const shortcuts = [
     { label: 'Liked Songs', to: { name: 'liked' } as Route, count: likedCount, icon: <Heart className="w-5 h-5 fill-current" />, tile: 'from-indigo-500 to-emerald-400' },
     { label: 'Downloads', to: { name: 'downloads' } as Route, count: downloadedCount, icon: <Download className="w-5 h-5" />, tile: 'from-emerald-600 to-teal-400' },
@@ -29,12 +35,14 @@ export const Sidebar = React.memo(function Sidebar({ route, likedCount, download
         </div>
         <nav aria-label="Main">
           <ul className="space-y-1">
-            {MAIN_TABS.map(({ label, icon: Icon, to }) => {
-              const current = route.name === to.name;
+            {MAIN_TABS.map(({ label, icon: Icon, tab }) => {
+              // Liked Songs / Downloads are marked by their own shortcut below
+              const current = route.name === TAB_ROOTS[tab].name;
               return (
                 <li key={label}>
                   <NavLink
-                    to={to}
+                    to={tabTarget(memory, route, tab)}
+                    tab={tab}
                     current={current}
                     className={`flex items-center gap-4 px-3 py-2 rounded-md text-[15px] font-semibold transition-colors ${
                       current ? 'text-white bg-white/[0.08]' : 'text-zinc-400 hover:text-white'
@@ -58,6 +66,7 @@ export const Sidebar = React.memo(function Sidebar({ route, likedCount, download
                 <li key={item.label}>
                   <NavLink
                     to={item.to}
+                    intent="tab"
                     current={current}
                     className={`flex items-center gap-3 p-2 rounded-md transition-colors ${current ? 'bg-white/[0.1]' : 'hover:bg-white/[0.06]'}`}
                   >

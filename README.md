@@ -52,6 +52,7 @@ Uninstalling keeps this folder; delete it to start fresh. The library belongs to
 ## Key Features
 
 - **Simple, Spotify-style navigation**: Home, Search and Library tabs along the bottom on phones and tablets, a sidebar on desktop. Every page has a real address (`#/search?q=…`, `#/library/liked`, …), so links, reloads and the Back button just work.
+- **Tabs remember where you were**: switching tabs returns to the same search (results shown at once, no new request), the same Library page and the same scroll position, Home's shelves included; Back and reloads restore it too. Tapping the tab you are on goes to its top (Search also focuses the box).
 - **Home**: a greeting, your recently played songs, recommendations based on the last song you played ("Because you listened to …"; "Popular right now" on a fresh install) and artists to explore.
 - **Search**: live YouTube Music search as you type, recent searches, and a Browse grid of genres and moods.
 - **Library**: Liked Songs and Downloads (newest first, with Play and Shuffle) and your recently played songs.

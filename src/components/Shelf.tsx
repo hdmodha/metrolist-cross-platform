@@ -6,13 +6,15 @@ interface ShelfProps {
   /** Small line above the title ("Because you listened to"). */
   eyebrow?: string;
   busy?: boolean;
+  /** Remembers the horizontal offset per page under this id (`a-z 0-9 -`, see `navigationMemory.ts`). */
+  memoryId?: string;
   children: React.ReactNode;
 }
 
 let shelfCounter = 0;
 
 /** A titled, horizontally scrolling row of cards (arrow buttons on wide screens). */
-export function Shelf({ title, eyebrow, busy = false, children }: ShelfProps) {
+export function Shelf({ title, eyebrow, busy = false, memoryId, children }: ShelfProps) {
   const [id] = React.useState(() => `shelf-${++shelfCounter}`);
   const listRef = React.useRef<HTMLUListElement | null>(null);
   const scroll = (direction: -1 | 1) => {
@@ -42,6 +44,7 @@ export function Shelf({ title, eyebrow, busy = false, children }: ShelfProps) {
       </div>
       <ul
         ref={listRef}
+        data-scroll-memory={memoryId}
         className="flex gap-4 lg:gap-0 overflow-x-auto no-scrollbar snap-x snap-mandatory lg:snap-none -mx-[var(--page-px)] px-[var(--page-px)] lg:-mx-3 lg:px-0 scroll-px-[var(--page-px)]"
       >
         {children}

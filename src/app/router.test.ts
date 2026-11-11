@@ -1,6 +1,6 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatRoute, isSameRoute, navigationEffect, parseRoute, type Route } from './router';
+import { formatRoute, isSameRoute, navigationEffect, navigationIntentFor, parseRoute, type Route } from './router';
 
 describe('parseRoute', () => {
   test('the five pages', () => {
@@ -82,5 +82,12 @@ describe('navigationEffect', () => {
   test('another page is pushed', () => {
     assert.equal(navigationEffect({ name: 'library' }, ''), 'push');
     assert.equal(navigationEffect({ name: 'search', query: 'x' }, '#/search'), 'push');
+  });
+});
+
+describe('navigationIntentFor', () => {
+  test('a location the app did not navigate to itself counts as Back / Forward (restore its scroll)', () => {
+    assert.equal(navigationIntentFor('#/library'), 'pop');
+    assert.equal(navigationIntentFor(''), 'pop');
   });
 });
