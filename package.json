@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
+    "check:budget": "node scripts/check-bundle-budget.mjs",
     "build": "vite build && npm run build:server",
     "build:server": "node scripts/build-node.mjs server",
     "build:electron": "node scripts/build-node.mjs electron",
@@ -30,14 +31,18 @@
     "desktop:dist": "npm run build && npm run build:electron && electron-builder --publish never"
   },
   "devDependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "@metrolist/capacitor-background-playback": "file:native/capacitor-background-playback",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": ">=4.1.0",
+    "@types/compression": "^1.8.1",
     "@types/express": ">=4.17.21",
     "@types/node": ">=22.0.0",
     "@types/react": ">=19.0.0",
     "@types/react-dom": ">=19.0.0",
     "@vitejs/plugin-react": ">=4.4.0",
+    "compression": "^1.8.2",
     "electron": "45.1.0",
     "electron-builder": "26.18.1",
     "esbuild": ">=0.25.0",
