@@ -8,6 +8,10 @@
  * - `instances` → every player ever created (a re-created stream shows up as a new instance)
  * - `loaded` → every video id a player was created with, loaded or cued
  * - `__userTap()` (a tap on the revealed player), `__externalPause()` (OS media key), `__stall()` (buffering forever)
+ * - `lateErrorOnSwitch = true`: the next switch to another video first delivers an error 150 for the
+ *   video it switches away from (like a real player whose error was still on its way), then plays
+ * - `getVideoData()` names the video the player last reported, like the real API (it lags behind a
+ *   `loadVideoById` until the player has taken the new video on)
  */
 
 export interface FakeYouTubeOptions {
@@ -26,6 +30,8 @@ export interface FakeYouTubeOptions {
    * requests (the desktop suite checks which ones the ad blocker cancels). Outcomes land in `probes`.
    */
   probeUrls?: string[];
+  /** The next switch to another video first raises error 150 for the previous one (see above). */
+  lateErrorOnSwitch?: boolean;
 }
 
 export interface FakePlayerDebug {
@@ -60,7 +66,7 @@ interface PlayerOptions {
   events: {
     onReady?: (ev: { target: unknown }) => void;
     onStateChange?: (ev: { data: number; target: unknown }) => void;
-    onError?: (ev: { data: number }) => void;
+    onError?: (ev: { data: number; target?: unknown }) => void;
   };
 }
 
@@ -80,6 +86,7 @@ export function installFakeYouTubeApi(): void {
   ctl.durations = ctl.durations || {};
   ctl.probeUrls = ctl.probeUrls || [];
   ctl.readyDelayMs = ctl.readyDelayMs || 60;
+  ctl.lateErrorOnSwitch = !!ctl.lateErrorOnSwitch;
   ctl.probes = {};
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
@@ -87,6 +94,8 @@ export function installFakeYouTubeApi(): void {
     let state = -1;
     let time = (opts.playerVars && Number(opts.playerVars.start)) || 0;
     let videoId = opts.videoId;
+    /** What the player has "delivered" about its video so far (`getVideoData`). */
+    let reportedVideoId = videoId;
     ctl.loaded.push(videoId);
     let destroyed = false;
     let stalled = false;
@@ -104,7 +113,7 @@ export function installFakeYouTubeApi(): void {
     const start = () => {
       if (ctl.blocked || destroyed) return;
       if (ctl.errorIds.indexOf(videoId) !== -1 || ctl.errorIds.indexOf('*') !== -1) {
-        if (opts.events.onError) opts.events.onError({ data: 150 });
+        if (opts.events.onError) opts.events.onError({ data: 150, target: self });
         return;
       }
       setState(3);
@@ -117,17 +126,34 @@ export function installFakeYouTubeApi(): void {
         ? [String((id as { videoId: string }).videoId), Number((id as { startSeconds?: number }).startSeconds) || 0]
         : [String(id), Number(startSeconds) || 0];
     self.loadVideoById = (id: unknown, startSeconds?: number) => {
+      const previous = videoId;
       [videoId, time] = readArgs(id, startSeconds);
       ctl.loaded.push(videoId);
       stalled = false;
-      setState(-1);
-      setTimeout(start, 30);
+      const takeOn = () => {
+        reportedVideoId = videoId;
+        setState(-1);
+        setTimeout(start, 30);
+      };
+      if (ctl.lateErrorOnSwitch && previous !== videoId) {
+        ctl.lateErrorOnSwitch = false;
+        // The previous video's error arrives first: the player still reports that video
+        setTimeout(() => {
+          if (destroyed) return;
+          if (opts.events.onError) opts.events.onError({ data: 150, target: self });
+          takeOn();
+        }, 0);
+        return;
+      }
+      takeOn();
     };
     self.cueVideoById = (id: unknown, startSeconds?: number) => {
       [videoId, time] = readArgs(id, startSeconds);
+      reportedVideoId = videoId;
       ctl.loaded.push(videoId);
       setState(5);
     };
+    self.getVideoData = () => ({ video_id: reportedVideoId });
     self.playVideo = () => {
       if (state === 1 || state === 3) return;
       if (state === 0) time = 0;

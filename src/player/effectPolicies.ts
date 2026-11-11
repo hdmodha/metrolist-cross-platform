@@ -40,13 +40,17 @@ export function alternateSearchQuery(track: { title: string; artist: string }): 
 /**
  * What to do when the stream of the active track reports an error (codes: `streamErrors.ts`).
  * `retried` = the player was already re-created once for this track's current video.
+ * `videoId` = the video the error came from (the bridge tags it): an error of another video is a
+ * late one, for the song (or upload) that was playing before a switch, and is ignored. Without a
+ * video id (the player API itself failed) the error applies to whatever is active.
  */
 export function planStreamErrorRecovery(
   state: PlayerState,
-  error: { code: number; online: boolean; retried: boolean }
+  error: { code: number; online: boolean; retried: boolean; videoId?: string }
 ): StreamErrorPlan | null {
   const track = selectActiveTrack(state);
   if (!track) return null;
+  if (error.videoId !== undefined && error.videoId !== track.videoId) return null;
   if (error.code === STREAM_ERROR_API_UNAVAILABLE || !error.online) return { kind: 'waitForNetwork' };
   const { reason, recovery } = classifyStreamError(error.code);
   if (recovery !== 'alternate' && !error.retried) {

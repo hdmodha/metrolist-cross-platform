@@ -32,6 +32,30 @@ test.describe('resilience', () => {
     await expect.poll(() => app.ytState(), { message: 'the same video is restarted, not left ended' }).toBe(1);
   });
 
+  test('a late error of the previous song (it arrives after the switch) leaves the new song alone', async ({ app, api, page }) => {
+    await app.open();
+    await app.searchAndPlayFirst('daft punk');
+    await app.openQueue();
+    await expect.poll(async () => (await app.upcomingTitles()).length).toBeGreaterThanOrEqual(1);
+    const [next] = await app.upcomingTitles();
+    await app.closeQueue();
+    const searchesBefore = api.searches.length;
+    // The player still reports the old video when its error 150 arrives, after the switch to `next`
+    await page.evaluate(() => {
+      (window as unknown as { __yt: { lateErrorOnSwitch: boolean } }).__yt.lateErrorOnSwitch = true;
+    });
+    await app.showControls();
+    await app.nextButton.click();
+    await expect(app.currentTitle).toHaveText(next);
+    await expect.poll(() => app.ytState()).toBe(1);
+    const playing = (await app.yt())?.videoId;
+    await page.waitForTimeout(1200);
+    expect((await app.yt())?.videoId, 'the new song keeps its own upload').toBe(playing);
+    expect(api.searches.slice(searchesBefore), 'no other upload is searched for').toEqual([]);
+    await expect(app.currentTitle).toHaveText(next);
+    await expect(app.notice).toHaveCount(0);
+  });
+
   test('songs that cannot be played are skipped, and three failures in a row stop playback', async ({ app }) => {
     await app.open({ yt: { errorIds: ['*'] } });
     await app.search('broken uploads');

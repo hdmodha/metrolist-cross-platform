@@ -94,6 +94,33 @@ describe('stream error recovery', () => {
   test('nothing to do without an active track', () => {
     assert.equal(planStreamErrorRecovery(createInitialPlayerState(), online(150)), null);
   });
+
+  test('a late error of the previous video (it arrived after a switch) is ignored', () => {
+    let state = playingLive();
+    state = playerReducer(state, { type: 'playFromSearch', track: yt('b') });
+    // The error came from song A's video, but song B is the active one now
+    for (const code of [5, 100, 150, 152]) {
+      assert.equal(planStreamErrorRecovery(state, { ...online(code), videoId: vid('a') }), null, `code ${code}`);
+    }
+    // ... also while waiting for the network: a stale error says nothing about the new video
+    assert.equal(planStreamErrorRecovery(state, { code: 150, online: false, retried: false, videoId: vid('a') }), null);
+    // An error of the active track's current video is handled as usual
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('b') })?.kind, 'findAlternate');
+  });
+
+  test('after a switch to another upload, only errors of that upload count', () => {
+    let state = playingLive();
+    const id = `ytm-${vid('a')}`;
+    state = playerReducer(state, { type: 'alternateVideoFound', trackId: id, videoId: vid('a2') });
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('a') }), null);
+    assert.equal(planStreamErrorRecovery(state, { ...online(150), videoId: vid('a2') })?.kind, 'findAlternate');
+  });
+
+  test('an error without a video id (the player API itself failed) still applies to the active track', () => {
+    const state = playingLive();
+    assert.deepEqual(planStreamErrorRecovery(state, { code: STREAM_ERROR_API_UNAVAILABLE, online: true, retried: false, videoId: undefined }), { kind: 'waitForNetwork' });
+    assert.equal(planStreamErrorRecovery(state, online(150))?.kind, 'findAlternate');
+  });
 });
 
 describe('embeddability pre-check', () => {

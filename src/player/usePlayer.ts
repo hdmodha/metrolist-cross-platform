@@ -75,7 +75,7 @@ export interface StreamBinding {
   onStatusChange: (status: StreamStatus) => void;
   onTimeUpdateMs: (currentMs: number, durationMs?: number) => void;
   onEnded: () => void;
-  onError: (code: number) => void;
+  onError: (code: number, videoId?: string) => void;
   onSeekHandled: (token: number) => void;
   onExternalPlayPause: (playing: boolean) => void;
 }
@@ -256,7 +256,7 @@ export function usePlayer() {
   const retriedStreamsRef = React.useRef(new Set<string>());
 
   const recoverFromStreamError = React.useCallback(
-    async (code: number) => {
+    async (code: number, videoId?: string) => {
       const online = typeof navigator === 'undefined' || navigator.onLine !== false;
       const current = selectActiveTrack(store.getState());
       const retryKey = current ? `${current.id} ${current.videoId}` : '';
@@ -264,6 +264,7 @@ export function usePlayer() {
         code,
         online,
         retried: retriedStreamsRef.current.has(retryKey),
+        videoId,
       });
       if (!plan || !current) return;
       if (plan.kind === 'waitForNetwork') {
@@ -344,8 +345,8 @@ export function usePlayer() {
         const trackId = store.getState().activeTrackId;
         if (trackId) send({ type: 'trackEnded', trackId, random: Math.random() });
       },
-      onError: (code: number) => {
-        void recoverFromStreamError(code);
+      onError: (code: number, videoId?: string) => {
+        void recoverFromStreamError(code, videoId);
       },
       onSeekHandled: (token: number) => {
         send({ type: 'seekHandled', token });
