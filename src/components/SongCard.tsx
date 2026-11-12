@@ -15,24 +15,24 @@ export const SongCard = React.memo(function SongCard({ track, isCurrent, isPlayi
     [track, liked, downloaded, actions]
   );
   return (
-    <li className="group relative w-36 sm:w-40 short:w-28 lg:w-48 xl:w-52 shrink-0 snap-start rounded-lg lg:p-3 lg:hover:bg-white/[0.06] transition-colors">
+    <li className="group relative w-36 sm:w-40 short:w-28 lg:w-48 xl:w-52 shrink-0 snap-start rounded-xl lg:p-3 lg:hover:bg-white/5 transition-colors">
       <button
         type="button"
         onClick={() => onPlay(track)}
         aria-label={songButtonLabel(track, isPlaying, unavailableReason)}
         title={unavailableReason ? songButtonLabel(track, isPlaying, unavailableReason) : undefined}
         aria-current={isCurrent ? 'true' : undefined}
-        className="block w-full text-left rounded-md cursor-pointer"
+        className="block w-full text-left rounded-xl cursor-pointer"
       >
         <span className="relative block">
           <Artwork
             src={track.coverUrl}
             size="large"
-            className={`block w-full aspect-square rounded-md shadow-lg shadow-black/40 ${unavailableReason ? 'opacity-50' : ''}`}
+            className={`block w-full aspect-square rounded-xl ${unavailableReason ? 'opacity-50' : ''}`}
           />
           <span
             aria-hidden="true"
-            className={`absolute right-2 bottom-2 w-10 h-10 rounded-full bg-emerald-400 text-zinc-950 shadow-xl items-center justify-center transition-all hidden lg:flex ${
+            className={`absolute right-2 bottom-2 w-10 h-10 rounded-full bg-emerald-400 text-zinc-950 shadow-xl items-center justify-center transition-[opacity,translate] duration-(--dur-base) ease-(--ease-out) hidden lg:flex ${
               isCurrent && isPlaying
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0'
@@ -49,7 +49,7 @@ export const SongCard = React.memo(function SongCard({ track, isCurrent, isPlayi
           <span className="block truncate text-[13px] text-zinc-400 mt-0.5">{track.artist}</span>
         </span>
         {unavailableReason && (
-          <span className="song-unavailable block mt-1 pr-8 truncate text-[11px] font-medium text-zinc-300">Unavailable</span>
+          <span className="song-unavailable block mt-1 pr-8 truncate text-[11px] font-medium text-zinc-400">Unavailable</span>
         )}
       </button>
       <TrackMenu

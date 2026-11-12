@@ -3,27 +3,38 @@ import { Heart, LoaderCircle, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, S
 import type { RepeatMode } from '../player/queueRules';
 
 const iconButton =
-  'tap-target inline-flex items-center justify-center rounded-full transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default';
+  'tap-target inline-flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-default';
 
 export const LikeButton = React.memo(function LikeButton({
   liked,
   onToggle,
   className = '',
   iconClassName = 'w-5 h-5',
+  resetKey,
 }: {
   liked: boolean;
   onToggle: () => void;
   className?: string;
   iconClassName?: string;
+  /** The song this button is about: a new song never "pops", only a song that becomes liked does. */
+  resetKey?: string;
 }) {
+  // The heart pops when the song it shows becomes liked (not when another, liked song takes its place)
+  const previous = React.useRef({ liked, resetKey });
+  const [pops, setPops] = React.useState(0);
+  React.useEffect(() => {
+    const before = previous.current;
+    previous.current = { liked, resetKey };
+    if (liked && !before.liked && before.resetKey === resetKey) setPops((n) => n + 1);
+  }, [liked, resetKey]);
   return (
     <button
       type="button"
       aria-label={liked ? 'Remove from Liked Songs' : 'Save to Liked Songs'}
       onClick={onToggle}
-      className={`${iconButton} ${liked ? 'text-emerald-400' : 'text-zinc-300 hover:text-white'} ${className}`}
+      className={`${iconButton} ${liked ? 'text-emerald-400' : 'text-zinc-400 hover:text-white'} ${className}`}
     >
-      <Heart className={`${iconClassName} ${liked ? 'fill-current' : ''}`} />
+      <Heart key={pops} className={`${iconClassName} ${liked ? 'fill-current' : ''} ${pops > 0 && liked ? 'heart-pop' : ''}`} />
     </button>
   );
 });
@@ -46,7 +57,7 @@ export const PlayPauseButton = React.memo(function PlayPauseButton({
   const look =
     size === 'sm'
       ? 'text-white'
-      : 'bg-white text-zinc-950 hover:scale-105 active:scale-95 transition-transform shadow-lg shadow-black/30';
+      : 'bg-white text-zinc-950';
   return (
     <button
       type="button"
@@ -57,10 +68,11 @@ export const PlayPauseButton = React.memo(function PlayPauseButton({
     >
       {isLoading ? (
         <LoaderCircle className={`${icon} animate-spin`} />
-      ) : isPlaying ? (
-        <Pause className={`${icon} fill-current`} />
       ) : (
-        <Play className={`${icon} fill-current ${size === 'sm' ? '' : 'ml-0.5'}`} />
+        <span className="icon-swap">
+          <Pause className={`${icon} fill-current`} data-off={isPlaying ? undefined : ''} />
+          <Play className={`${icon} fill-current ${size === 'sm' ? '' : 'ml-0.5'}`} data-off={isPlaying ? '' : undefined} />
+        </span>
       )}
     </button>
   );
@@ -107,11 +119,11 @@ export const TransportControls = React.memo(function TransportControls({
         <Shuffle className={large ? 'w-6 h-6 short:w-5 short:h-5' : 'w-4 h-4'} />
         {shuffleEnabled && dot}
       </button>
-      <button type="button" aria-label="Previous Track" onClick={onPrevious} className={`${iconButton} ${pad} text-white/90 hover:text-white`}>
+      <button type="button" aria-label="Previous Track" onClick={onPrevious} className={`${iconButton} ${pad} text-white hover:text-white`}>
         <SkipBack className={`${skip} fill-current`} />
       </button>
       <PlayPauseButton isPlaying={isPlaying} isLoading={isLoading} onToggle={onTogglePlay} size={large ? 'lg' : 'md'} />
-      <button type="button" aria-label="Next Track" onClick={onNext} className={`${iconButton} ${pad} text-white/90 hover:text-white`}>
+      <button type="button" aria-label="Next Track" onClick={onNext} className={`${iconButton} ${pad} text-white hover:text-white`}>
         <SkipForward className={`${skip} fill-current`} />
       </button>
       <button type="button" aria-label={REPEAT_LABEL[repeatMode]} onClick={onCycleRepeat} className={toggleClass(repeatMode !== 'OFF')}>

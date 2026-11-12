@@ -32,26 +32,26 @@ export const LibraryPage = React.memo(function LibraryPage({ likedCount, downloa
     pressTimer.current = null;
   };
   React.useEffect(() => cancelPress, []);
-  const entries: Array<{ label: string; to: Route; count: number; icon: React.ReactNode; tile: string }> = [
-    { label: 'Liked Songs', to: { name: 'liked' }, count: likedCount, icon: <Heart className="w-7 h-7 fill-current" />, tile: 'from-indigo-500 to-emerald-400' },
-    { label: 'Downloads', to: { name: 'downloads' }, count: downloadedCount, icon: <Download className="w-7 h-7" />, tile: 'from-emerald-600 to-teal-400' },
+  const entries: Array<{ label: string; to: Route; count: number; icon: React.ReactNode }> = [
+    { label: 'Liked Songs', to: { name: 'liked' }, count: likedCount, icon: <Heart className="w-7 h-7 fill-current" />, },
+    { label: 'Downloads', to: { name: 'downloads' }, count: downloadedCount, icon: <Download className="w-7 h-7" />, },
   ];
   return (
     <div className="space-y-8 short:space-y-6">
-      <h1 className="text-[28px] short:text-2xl lg:text-4xl font-extrabold tracking-tight text-white">Your Library</h1>
+      <h1 className="text-[28px] short:text-2xl lg:text-[32px] font-bold tracking-tight text-white">Your Library</h1>
 
       <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:max-w-3xl">
         {entries.map((entry) => (
           <li key={entry.label}>
-            <NavLink to={entry.to} className="group flex items-center gap-4 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] p-3 transition-colors">
-              <span aria-hidden="true" className={`w-16 h-16 short:w-12 short:h-12 rounded-md bg-gradient-to-br ${entry.tile} text-white flex items-center justify-center shrink-0 shadow-lg shadow-black/30`}>
+            <NavLink to={entry.to} className="group flex items-center gap-4 rounded-xl bg-white/5 hover:bg-white/8 p-3">
+              <span aria-hidden="true" className="w-16 h-16 short:w-12 short:h-12 rounded-lg bg-white/8 text-white flex items-center justify-center shrink-0">
                 {entry.icon}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-base font-bold text-white">{entry.label}</span>
                 <span className="block text-sm text-zinc-400">{songCount(entry.count)}</span>
               </span>
-              <ChevronRight className="w-5 h-5 text-zinc-500 group-hover:text-white shrink-0" aria-hidden="true" />
+              <ChevronRight className="w-5 h-5 text-zinc-400 group-hover:text-white shrink-0" aria-hidden="true" />
             </NavLink>
           </li>
         ))}
@@ -76,7 +76,7 @@ export const LibraryPage = React.memo(function LibraryPage({ likedCount, downloa
 
       <p
         data-testid="app-version"
-        className="pt-2 text-xs text-zinc-600 select-none [-webkit-touch-callout:none]"
+        className="pt-2 text-xs text-zinc-400 select-none [-webkit-touch-callout:none]"
         onPointerDown={() => {
           cancelPress();
           pressTimer.current = window.setTimeout(() => {

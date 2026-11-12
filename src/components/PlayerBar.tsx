@@ -32,7 +32,7 @@ interface PlayerBarProps {
   expandRef: React.Ref<HTMLButtonElement>;
 }
 
-const iconButton = 'tap-target inline-flex items-center justify-center w-8 h-8 rounded-full text-zinc-400 hover:text-white transition-colors cursor-pointer';
+const iconButton = 'tap-target inline-flex items-center justify-center w-8 h-8 rounded-full text-zinc-400 hover:text-white cursor-pointer';
 
 /** Desktop: the full-width player along the bottom. Only its seek bar re-renders on playback ticks. */
 export const PlayerBar = React.memo(function PlayerBar(props: PlayerBarProps) {
@@ -45,17 +45,23 @@ export const PlayerBar = React.memo(function PlayerBar(props: PlayerBarProps) {
     <footer
       aria-label="Player"
       data-chrome="bottom"
-      className="hidden lg:grid fixed inset-x-0 bottom-0 z-40 h-[calc(var(--bar-h)+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] grid-cols-[minmax(0,1fr)_minmax(0,40rem)_minmax(0,1fr)] items-center gap-6 bg-black"
+      className="enter-up hidden lg:grid fixed inset-x-0 bottom-0 z-40 h-[calc(var(--bar-h)+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] grid-cols-[minmax(0,1fr)_minmax(0,40rem)_minmax(0,1fr)] items-center gap-6 bg-(--surface-solid)"
     >
       <div className="flex items-center gap-3 min-w-0">
-        <Artwork src={track.coverUrl} eager className="w-14 h-14 rounded-md shrink-0" />
+        <Artwork src={track.coverUrl} eager className="w-14 h-14 rounded-lg shrink-0" />
         <div className="min-w-0">
           <div data-current-title className="truncate text-sm font-semibold text-white">
-            {track.title}
+            <span key={track.id} className="fade-in">
+              {track.title}
+            </span>
           </div>
-          <div className="truncate text-xs text-zinc-400 mt-0.5">{track.artist}</div>
+          <div className="truncate text-xs text-zinc-400 mt-0.5">
+            <span key={track.id} className="fade-in">
+              {track.artist}
+            </span>
+          </div>
         </div>
-        <LikeButton liked={props.liked} onToggle={() => props.onToggleLike(track.id, track)} className="w-8 h-8 shrink-0" iconClassName="w-4 h-4" />
+        <LikeButton resetKey={track.id} liked={props.liked} onToggle={() => props.onToggleLike(track.id, track)} className="w-8 h-8 shrink-0" iconClassName="w-4 h-4" />
       </div>
 
       <div className="flex flex-col items-center gap-1 min-w-0">

@@ -1,10 +1,11 @@
 import React from 'react';
-import { History, LoaderCircle, RotateCw, Search, X } from 'lucide-react';
+import { CircleAlert, History, Search, SearchX, X } from 'lucide-react';
 import { registerSearchInput } from '../app/navigationMemory';
 import { historyFlags, navigate } from '../app/router';
 import { BROWSE_TILES } from '../data/browse';
 import { toMetrolistTrack } from '../player/playerCore';
-import { SongList, type ListStatus } from '../components/SongList';
+import { EmptyState } from '../components/EmptyState';
+import { SkeletonRows, SongList, type ListStatus } from '../components/SongList';
 import { addRecentSearch, loadRecentSearches, removeRecentSearch, saveRecentSearches } from '../utils/recentSearches';
 import { countRender } from '../utils/renderProbe';
 import { usePlayOne } from './usePlayList';
@@ -144,11 +145,11 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
 
   return (
     <div>
-      <h1 className="text-[28px] short:text-2xl lg:text-4xl font-extrabold tracking-tight text-white mb-4 short:mb-3">Search</h1>
+      <h1 className="text-[28px] short:text-2xl lg:text-[32px] font-bold tracking-tight text-white mb-4 short:mb-3">Search</h1>
 
-      <div className="sticky top-0 z-20 -mx-[var(--page-px)] px-[var(--page-px)] pt-[env(safe-area-inset-top)] pb-3 bg-[#09090B]">
+      <div className="sticky top-0 z-20 -mx-[var(--page-px)] px-[var(--page-px)] pt-[env(safe-area-inset-top)] pb-2 bg-[#09090B]">
         <form role="search" action="#" onSubmit={onSubmit} className="relative w-full lg:max-w-xl">
-          <Search className="w-5 h-5 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
+          <Search className="w-5 h-5 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
           <input
             ref={inputRef}
             type="search"
@@ -163,16 +164,15 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
             placeholder="What do you want to listen to?"
             value={text}
             onChange={(e) => onChange(e.target.value)}
-            className="search-input w-full h-12 short:h-10 pl-11 pr-20 rounded-lg bg-white text-zinc-950 text-base font-medium placeholder:text-zinc-500 placeholder:font-normal focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            className="search-input w-full h-12 short:h-10 pl-11 pr-20 rounded-xl bg-white/8 text-white text-base placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-400"
           />
           <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center">
-            {isSearching && <LoaderCircle className="w-4 h-4 mr-1 text-zinc-500 animate-spin" aria-hidden="true" />}
             {text && (
               <button
                 type="button"
                 aria-label="Clear search"
                 onClick={clear}
-                className="tap-target inline-flex items-center justify-center w-10 h-10 rounded-full text-zinc-600 hover:text-zinc-950 cursor-pointer"
+                className="tap-target inline-flex items-center justify-center w-10 h-10 rounded-full text-zinc-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -185,38 +185,34 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
         <section aria-label="Search results" aria-busy={isSearching} className="mt-2">
           <h2 className="sr-only">Results for “{shownQuery}”</h2>
           {search.status !== 'done' && search.status !== 'error' && (
-            <div role="status" className="flex items-center gap-2 py-8 justify-center text-sm text-zinc-400">
-              <LoaderCircle className="w-4 h-4 animate-spin" aria-hidden="true" />
-              <span>Searching YouTube Music…</span>
+            <div role="status">
+              <span className="sr-only">Searching YouTube Music…</span>
+              <SkeletonRows />
             </div>
           )}
           {search.status === 'error' && (
-            <div role="alert" className="flex flex-col items-center text-center gap-3 py-10 px-4">
-              <p className="text-sm text-zinc-300 max-w-sm">Search couldn’t reach YouTube Music. Check your connection and try again.</p>
-              <button
-                type="button"
-                onClick={() => rerun(search.query)}
-                className="tap-target inline-flex items-center gap-2 px-5 py-2 rounded-full bg-white text-zinc-950 text-sm font-bold cursor-pointer"
-              >
-                <RotateCw className="w-4 h-4" aria-hidden="true" />
-                <span>Retry</span>
-              </button>
-            </div>
+            <EmptyState
+              role="alert"
+              icon={<CircleAlert className="w-7 h-7" aria-hidden="true" />}
+              title="Search couldn’t reach YouTube Music"
+              action={{ label: 'Retry', onClick: () => rerun(search.query) }}
+            >
+              Check your connection and try again.
+            </EmptyState>
           )}
           {search.status === 'done' && results.length === 0 && (
-            <div role="status" className="py-10 px-4 text-center">
-              <p className="text-base font-semibold text-white">No songs found for “{search.query}”</p>
-              <p className="mt-1 text-sm text-zinc-400">Check the spelling, or try fewer or different words.</p>
-            </div>
+            <EmptyState role="status" icon={<SearchX className="w-7 h-7" aria-hidden="true" />} title={`No songs found for “${search.query}”`}>
+              Check the spelling, or try fewer or different words.
+            </EmptyState>
           )}
-          {results.length > 0 && <SongList label="Songs" tracks={results} onPlay={playResult} {...status} />}
+          {results.length > 0 && <SongList label="Songs" className="fade-in" tracks={results} onPlay={playResult} {...status} />}
         </section>
       ) : (
         <div className="space-y-8 short:space-y-6 mt-2">
           {recent.recent.length > 0 && (
             <section aria-labelledby="recent-searches" className="lg:max-w-xl">
               <div className="flex items-center justify-between gap-3 mb-1">
-                <h2 id="recent-searches" className="text-lg font-bold text-white">
+                <h2 id="recent-searches" className="text-xl font-bold text-white">
                   Recent searches
                 </h2>
                 <button
@@ -229,13 +225,13 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
               </div>
               <ul className="-mx-2">
                 {recent.recent.map((q) => (
-                  <li key={q} className="flex items-center rounded-md hover:bg-white/[0.06]">
+                  <li key={q} className="flex items-center rounded-xl hover:bg-white/5">
                     <button
                       type="button"
                       onClick={() => runNow(q)}
                       className="flex flex-1 min-w-0 items-center gap-3 py-2 pl-2 text-left cursor-pointer rounded-md"
                     >
-                      <span aria-hidden="true" className="w-10 h-10 rounded-full bg-white/[0.07] flex items-center justify-center shrink-0 text-zinc-400">
+                      <span aria-hidden="true" className="w-10 h-10 rounded-full bg-white/8 flex items-center justify-center shrink-0 text-zinc-400">
                         <History className="w-5 h-5" />
                       </span>
                       <span className="truncate text-[15px] text-white">{q}</span>
@@ -255,7 +251,7 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
           )}
 
           <section aria-labelledby="browse-all">
-            <h2 id="browse-all" className="text-lg font-bold text-white mb-3">
+            <h2 id="browse-all" className="text-xl font-bold text-white mb-3">
               Browse all
             </h2>
             <ul className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3 lg:gap-4">
@@ -264,10 +260,9 @@ export const SearchPage = React.memo(function SearchPage({ query, ...status }: S
                   <button
                     type="button"
                     onClick={() => runNow(tile.query)}
-                    className={`relative w-full h-24 short:h-16 lg:h-28 overflow-hidden rounded-lg ${tile.className} p-3 text-left cursor-pointer hover:brightness-110 transition`}
+                    className={`relative w-full h-24 short:h-16 lg:h-28 overflow-hidden rounded-xl ${tile.className} p-3 text-left cursor-pointer`}
                   >
                     <span className="relative z-10 text-base lg:text-lg font-bold text-white">{tile.label}</span>
-                    <span aria-hidden="true" className="absolute -right-3 -bottom-3 w-16 h-16 lg:w-20 lg:h-20 rounded-md bg-black/20 rotate-[25deg]" />
                   </button>
                 </li>
               ))}

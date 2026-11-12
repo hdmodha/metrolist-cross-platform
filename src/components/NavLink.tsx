@@ -18,6 +18,7 @@ export function NavLink({ to, current = false, tab, intent, onClick, children, .
   return (
     <a
       {...rest}
+      className={`press ${rest.className ?? ''}`}
       href={formatRoute(to)}
       aria-current={current ? 'page' : undefined}
       onClick={(e) => {
