@@ -1,5 +1,6 @@
 import React from 'react';
 import { STREAM_ERROR_API_UNAVAILABLE } from '../player/effectPolicies';
+import { loadYouTubeIframeApi } from '../player/youtubeApiLoader';
 import { appActivity, positionPollIntervalMs } from '../player/appActivity';
 import type { StreamStatus } from '../player/playerCore';
 import {
@@ -129,68 +130,11 @@ function reportedVideoId(player: YTPlayerInstance | null | undefined): string | 
 
 const YT_STATE = { UNSTARTED: -1, ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 } as const;
 
-const API_LOAD_TIMEOUT_MS = 15000;
 /** How long a requested start may sit in "unstarted" before we assume autoplay was refused. */
 const START_WATCHDOG_MS = 6000;
 const START_WATCHDOG_AFTER_BLOCK_MS = 1800;
 /** Grace period before a pause / play that the app did not ask for is treated as external. */
 const EXTERNAL_STATE_SETTLE_MS = 700;
-
-interface ApiListener {
-  ready: () => void;
-  fail: () => void;
-}
-
-let ytApiLoading = false;
-const apiListeners: ApiListener[] = [];
-
-function flushApiListeners(outcome: keyof ApiListener) {
-  const pending = apiListeners.splice(0, apiListeners.length);
-  for (const listener of pending) {
-    listener[outcome]();
-  }
-}
-
-function loadYouTubeIframeApi(listener: ApiListener) {
-  if (typeof window === 'undefined') return;
-  if (window.YT && window.YT.Player) {
-    listener.ready();
-    return;
-  }
-  apiListeners.push(listener);
-  if (ytApiLoading) return;
-  ytApiLoading = true;
-
-  let settled = false;
-  const settle = (outcome: keyof ApiListener) => {
-    if (settled) return;
-    settled = true;
-    ytApiLoading = false;
-    window.clearTimeout(timeoutId);
-    flushApiListeners(outcome);
-  };
-
-  const prev = window.onYouTubeIframeAPIReady;
-  window.onYouTubeIframeAPIReady = () => {
-    if (prev) prev();
-    settle('ready');
-  };
-
-  const script = document.createElement('script');
-  script.src = 'https://www.youtube.com/iframe_api';
-  script.async = true;
-  script.onerror = () => {
-    script.remove();
-    settle('fail');
-  };
-  const timeoutId = window.setTimeout(() => {
-    if (!(window.YT && window.YT.Player)) {
-      script.remove();
-      settle('fail');
-    }
-  }, API_LOAD_TIMEOUT_MS);
-  document.head.appendChild(script);
-}
 
 export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) => {
   const { videoId, isPlaying, volume, isMuted, seekRequest, retryNonce, qualityMode } = props;

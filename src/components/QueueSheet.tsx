@@ -39,7 +39,7 @@ interface QueueRowProps {
 const QueueRow = React.memo(function QueueRow({ track, isFirst, isLast, unavailableReason, onPlay, onMove, onRemove }: QueueRowProps) {
   const label = `Play ${track.title} by ${track.artist}`;
   return (
-    <li className="song-row flex items-center gap-1 rounded-md hover:bg-white/[0.06]">
+    <li className="song-row song-row-queue flex items-center gap-1 rounded-md hover:bg-white/[0.06]">
       <button
         type="button"
         onClick={() => onPlay(track.id)}

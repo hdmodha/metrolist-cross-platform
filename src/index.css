@@ -128,10 +128,26 @@ body {
   outline: none; /* the search box shows its own focus ring */
 }
 
-/* Long lists: rows outside the viewport are not laid out or painted */
+/*
+ * Long lists: rows outside the viewport are not laid out or painted. `auto <height>` is the real
+ * row height (artwork + padding), so the page height does not jump while rows are skipped; once a
+ * row has been rendered the browser remembers its own size. Paint containment clips everything
+ * outside the row's box, so the keyboard focus ring is drawn inside it. The row menu is a portal.
+ */
 .song-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 64px;
+}
+@media (max-height: 500px) and (orientation: landscape) {
+  .song-row {
+    contain-intrinsic-size: auto 56px; /* short screens: 40 px artwork */
+  }
+}
+.song-row.song-row-queue {
+  contain-intrinsic-size: auto 52px; /* queue rows: 40 px artwork, py-1.5 */
+}
+.song-row :focus-visible {
+  outline-offset: -2px;
 }
 
 /* ------------------------------------------- sliders ------------------------------------------- */

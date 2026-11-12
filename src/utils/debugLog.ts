@@ -8,6 +8,7 @@
  * state changes, never on playback-clock ticks, and nothing renders it outside the debug page.
  */
 import { selectActiveTrack, type PlayerState } from '../player/playerCore';
+import { createPlaybackTimingTracker } from '../player/playbackTiming';
 import type { PlayerStore } from '../player/playerStore';
 
 export const DEBUG_LOG_CAPACITY = 100;
@@ -85,12 +86,19 @@ export function describePlayerChange(previous: PlayerState | null, next: PlayerS
 }
 
 /** Logs every player change described by `describePlayerChange`; returns the disconnect function. */
-export function connectPlayerDebugLog(store: Pick<PlayerStore, 'getState' | 'subscribe'>, log: DebugLog = debugLog): () => void {
+export function connectPlayerDebugLog(
+  store: Pick<PlayerStore, 'getState' | 'subscribe'>,
+  log: DebugLog = debugLog,
+  now: () => number = () => performance.now()
+): () => void {
   let previous: PlayerState | null = null;
+  const timing = createPlaybackTimingTracker(now);
   const record = () => {
     const next = store.getState();
     if (next === previous) return;
     for (const line of describePlayerChange(previous, next)) log.add('player', line);
+    const timingLine = timing.observe(previous, next);
+    if (timingLine) log.add('player', timingLine);
     previous = next;
   };
   record();
