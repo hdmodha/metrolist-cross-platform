@@ -54,10 +54,11 @@ export function hiddenPlayerCssSize(mode: StreamQualityMode, devicePixelRatio: n
  * Extra hints of the low mode, tried after the box size and `setPlaybackQuality('small')` both left a
  * phone on `large` (91x51 css, dpr 3.5): the undocumented player variable `vq`, and the deprecated
  * `suggestedQuality` argument of `loadVideoById` / `cueVideoById`. YouTube may ignore both.
- * With the hint `small` the same phone reported `medium` (360p) instead of `large`, one step above
- * what was asked, so the hint is now `tiny` (144p) to see whether the player lands one step lower.
+ * Measured on that phone, three songs each: no hint `large` (480p), hint `small` `medium` (360p),
+ * hint `tiny` `large` again (the player seems to ignore it). So `small` is the hint that helps; do
+ * not change it without a new phone log.
  */
-export const LOW_QUALITY_HINT = 'tiny';
+export const LOW_QUALITY_HINT = 'small';
 
 /** Player variables the mode adds when the player is created (`low`: `vq=<LOW_QUALITY_HINT>`). */
 export function qualityPlayerVars(mode: StreamQualityMode): Record<string, string> {
