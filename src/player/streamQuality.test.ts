@@ -68,10 +68,10 @@ describe('hiddenPlayerCssSize', () => {
 });
 
 describe('quality hints', () => {
-  it('low adds vq=tiny and suggests tiny; auto adds nothing', () => {
-    assert.equal(LOW_QUALITY_HINT, 'tiny');
-    assert.deepEqual(qualityPlayerVars('low'), { vq: 'tiny' });
-    assert.equal(suggestedQualityFor('low'), 'tiny');
+  it('low adds vq=small and suggests small (the hint that lowered the quality on a phone); auto adds nothing', () => {
+    assert.equal(LOW_QUALITY_HINT, 'small');
+    assert.deepEqual(qualityPlayerVars('low'), { vq: 'small' });
+    assert.equal(suggestedQualityFor('low'), 'small');
     assert.deepEqual(qualityPlayerVars('auto'), {});
     assert.equal(suggestedQualityFor('auto'), undefined);
   });
