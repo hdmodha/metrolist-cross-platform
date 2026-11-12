@@ -27,6 +27,8 @@ import {
   type Embeddability,
 } from './embeddability';
 import { LruTtlCache } from './lruCache';
+import { debugLog } from './debugLog';
+import { formatSearchFailure, formatSearchTiming } from './searchTiming';
 
 /** Backend requests (the server retries upstream within 16 s, so this leaves it room to answer). */
 const REQUEST_TIMEOUT_MS = 20000;
@@ -255,17 +257,26 @@ export async function searchTracks(
   const cached = searchCache.get(cacheKey, Date.now());
   if (cached) return cached;
 
-  const tracks = await backendThenDirect(
-    signal,
-    async () => {
-      const data = await fetchBackendJson<{ tracks?: InnerTubeParsedTrack[] }>(
-        `/api/innertube/search?q=${encodeURIComponent(trimmed)}`,
-        signal
-      );
-      return Array.isArray(data.tracks) ? data.tracks : [];
-    },
-    () => searchInnerTubeTracks(directInnerTubeTransport(), trimmed)
-  );
+  const startedAt = performance.now();
+  let tracks: InnerTubeParsedTrack[];
+  try {
+    tracks = await backendThenDirect(
+      signal,
+      async () => {
+        const data = await fetchBackendJson<{ tracks?: InnerTubeParsedTrack[] }>(
+          `/api/innertube/search?q=${encodeURIComponent(trimmed)}`,
+          signal
+        );
+        return Array.isArray(data.tracks) ? data.tracks : [];
+      },
+      () => searchInnerTubeTracks(directInnerTubeTransport(), trimmed)
+    );
+  } catch (error) {
+    // An aborted request is a newer search replacing this one, not a failure
+    if (!signal?.aborted) debugLog.add('page', formatSearchFailure(performance.now() - startedAt), 'warn');
+    throw error;
+  }
+  debugLog.add('page', formatSearchTiming(tracks.length, performance.now() - startedAt));
   if (tracks.length > 0) searchCache.set(cacheKey, tracks, Date.now());
   return tracks;
 }

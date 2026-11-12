@@ -165,6 +165,10 @@ test.describe('resilience', () => {
     });
     await page.clock.install();
     await app.open();
+    // The idle warm-up of the API script loads it once before any play: let it run, then count from the play
+    await page.clock.runFor(4000);
+    await expect.poll(() => scriptLoads).toBe(1);
+    scriptLoads = 0;
     await app.search('kavinsky nightcall');
     await app.resultRows().first().click();
     await expect(app.waitingBanner).toBeVisible();

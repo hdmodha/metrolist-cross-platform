@@ -98,4 +98,24 @@ test.describe('library', () => {
     await app.openQueue();
     await expect.poll(() => app.upcomingTitles()).toEqual([recent[2].title, recent[3].title]);
   });
+  test('a long list skips rows that are off-screen (content-visibility) and renders them when scrolled to', async ({ app }) => {
+    const liked = Array.from({ length: 1000 }, (_, i) => ({
+      videoId: `v${String(i).padStart(10, '0')}`,
+      title: `Song number ${i}`,
+      artist: `Artist ${i % 50}`,
+      album: 'Album',
+      durationMs: 200000,
+      thumbnailUrl: 'https://i.ytimg.com/vi/x/hqdefault.jpg',
+    }));
+    await app.open({ storage: v2Storage({ liked }), path: '/#/library/liked' });
+    const rows = app.main.locator('li.song-row');
+    await expect(rows).toHaveCount(1000);
+    const rendered = (index: number) =>
+      // The row itself is always laid out; what a skipped row hides is its content (the play button)
+      rows.nth(index).locator('button').first().evaluate((el) => (el as Element & { checkVisibility: (o: object) => boolean }).checkVisibility({ contentVisibilityAuto: true }));
+    expect(await rendered(0)).toBe(true);
+    expect(await rendered(999)).toBe(false);
+    await rows.nth(999).scrollIntoViewIfNeeded();
+    await expect.poll(() => rendered(999)).toBe(true);
+  });
 });

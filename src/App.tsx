@@ -30,10 +30,14 @@ import {
   selectQueueTracks,
   selectRecentlyPlayedTracks,
 } from './player/playerCore';
+import { warmUpYouTubeApi } from './player/youtubeApiLoader';
 import { usePlayer } from './player/usePlayer';
+import { debugLog } from './utils/debugLog';
 import { countRender } from './utils/renderProbe';
 
 const DESKTOP_QUERY = '(min-width: 1024px)';
+
+let startUpLogged = false;
 
 /**
  * The app shell: player state (`usePlayer`), the route (`useRoute`) and Now Playing
@@ -47,6 +51,18 @@ export default function App() {
   useNavigationMemory(route);
   const nowPlaying = useNowPlaying(activeTrack !== null);
   const [queueFirst, setQueueFirst] = React.useState(false);
+
+  // Once per page load: the start-up time for the debug log, and the silent early load of the
+  // YouTube API while nothing is active (a track that is active makes the bridge load it)
+  const nothingActiveRef = React.useRef(true);
+  nothingActiveRef.current = !player.stream;
+  React.useEffect(() => {
+    if (!startUpLogged) {
+      startUpLogged = true;
+      debugLog.add('page', `start-up: app ready in ${Math.round(performance.now())} ms`);
+    }
+    warmUpYouTubeApi(() => nothingActiveRef.current);
+  }, []);
 
   const { tracksById, likedIds, downloadedIds, recentlyPlayedIds, queueIds } = state;
   const likedTracks = React.useMemo(() => selectLikedTracks({ tracksById, likedIds }), [tracksById, likedIds]);
