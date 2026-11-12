@@ -35,6 +35,16 @@ const IOS_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 `;
 
 describe('Android MainActivity', () => {
+  test('Back goes one step back in the page, and at the first entry sends the app to the background', () => {
+    // Capacitor's core has no Back handling: without this every Back press finished the activity (music stopped)
+    assert.ok(template.includes('getOnBackPressedDispatcher()'));
+    assert.ok(template.includes('new OnBackPressedCallback(true)'));
+    const handler = template.slice(template.indexOf('handleOnBackPressed'));
+    assert.ok(handler.indexOf('webView.canGoBack()') < handler.indexOf('webView.goBack()'));
+    assert.ok(handler.indexOf('webView.goBack()') < handler.indexOf('moveTaskToBack(true)'));
+    assert.ok(!template.includes('finish()'));
+  });
+
   test('the template is ours: Capacitor\'s BridgeActivity with the plugin\'s layout swap', () => {
     assert.ok(template.startsWith('package com.metrolist.music;'));
     assert.match(template, /public class MainActivity extends BridgeActivity/);

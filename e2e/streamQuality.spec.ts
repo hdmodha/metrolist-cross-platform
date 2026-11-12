@@ -1,5 +1,5 @@
 import { expect, test, type MetrolistApp } from './fixtures/test';
-import { STREAM_QUALITY_KEY, hiddenPlayerCssSize } from '../src/player/streamQuality';
+import { LOW_QUALITY_HINT, STREAM_QUALITY_KEY, hiddenPlayerCssSize } from '../src/player/streamQuality';
 
 /** The box the hidden player's iframe lives in (its parent), in CSS pixels. */
 async function hostBox(app: MetrolistApp): Promise<{ width: number; height: number }> {
@@ -44,15 +44,15 @@ test.describe('hidden player video quality', () => {
     expect(calls.every((q) => q === 'small')).toBe(true);
     expect(calls.length).toBeLessThanOrEqual(2); // once when ready, once for the reported `large`
 
-    // The extra hints: every player is created with vq=small, every load / cue suggests small
+    // The extra hints: every player is created with vq=<hint>, every load / cue suggests it
     const first = await hints(app);
     expect(first.vq.length).toBeGreaterThan(0);
-    expect(first.vq.every((v) => v === 'small')).toBe(true);
-    expect(first.suggested.every((v) => v === 'small')).toBe(true);
+    expect(first.vq.every((v) => v === LOW_QUALITY_HINT)).toBe(true);
+    expect(first.suggested.every((v) => v === LOW_QUALITY_HINT)).toBe(true);
 
     const log = await openDebugLog(app);
     await expect(log).toContainText(
-      new RegExp(`stream quality: large \\(video \\S+; mode low, player ${expected.width}x${expected.height} css, dpr ${Math.round(ratio * 100) / 100}, asked small, hints vq\\+suggestedQuality small\\)`)
+      new RegExp(`stream quality: large \\(video \\S+; mode low, player ${expected.width}x${expected.height} css, dpr ${Math.round(ratio * 100) / 100}, asked small, hints vq\\+suggestedQuality ${LOW_QUALITY_HINT}\\)`)
     );
   });
 

@@ -20,7 +20,7 @@ import {
 import { APP_BACKGROUND_EVENT, APP_FOREGROUND_EVENT } from '../shared/appBackgroundSignal';
 import { appActivity } from './appActivity';
 import { connectPlayerDebugLog, debugLog } from '../utils/debugLog';
-import { readStreamQualityMode, writeStreamQualityMode, type StreamQualityMode } from './streamQuality';
+import { LOW_QUALITY_HINT, readStreamQualityMode, writeStreamQualityMode, type StreamQualityMode } from './streamQuality';
 import type { StreamQualityDetails } from '../components/YouTubeStreamBridge';
 import {
   fromPersistedState,
@@ -380,7 +380,7 @@ export function usePlayer() {
           'player',
           `stream quality: ${quality} (video ${videoId}; mode ${mode}, player ${width}x${height} css, dpr ${Math.round(dpr * 100) / 100}${
             asked ? ', asked small' : mode === 'low' ? ', not asked' : ''
-          }${hinted ? ', hints vq+suggestedQuality small' : ''})`
+          }${hinted ? `, hints vq+suggestedQuality ${LOW_QUALITY_HINT}` : ''})`
         );
       },
       onExternalPlayPause: (playing: boolean) => {

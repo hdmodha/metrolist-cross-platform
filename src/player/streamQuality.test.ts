@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  LOW_QUALITY_HINT,
   STREAM_QUALITY_KEY,
   hiddenPlayerCssSize,
   isAboveTarget,
@@ -67,9 +68,10 @@ describe('hiddenPlayerCssSize', () => {
 });
 
 describe('quality hints', () => {
-  it('low adds vq=small and suggests small; auto adds nothing', () => {
-    assert.deepEqual(qualityPlayerVars('low'), { vq: 'small' });
-    assert.equal(suggestedQualityFor('low'), 'small');
+  it('low adds vq=tiny and suggests tiny; auto adds nothing', () => {
+    assert.equal(LOW_QUALITY_HINT, 'tiny');
+    assert.deepEqual(qualityPlayerVars('low'), { vq: 'tiny' });
+    assert.equal(suggestedQualityFor('low'), 'tiny');
     assert.deepEqual(qualityPlayerVars('auto'), {});
     assert.equal(suggestedQualityFor('auto'), undefined);
   });
