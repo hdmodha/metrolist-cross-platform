@@ -4,7 +4,9 @@ import {
   STREAM_QUALITY_KEY,
   hiddenPlayerCssSize,
   isAboveTarget,
+  qualityPlayerVars,
   readStreamQualityMode,
+  suggestedQualityFor,
   writeStreamQualityMode,
 } from './streamQuality';
 
@@ -61,6 +63,15 @@ describe('hiddenPlayerCssSize', () => {
     assert.deepEqual(hiddenPlayerCssSize('low', 0.5), { width: 320, height: 180 });
     assert.deepEqual(hiddenPlayerCssSize('low', 10), { width: 80, height: 45 });
     assert.deepEqual(hiddenPlayerCssSize('low', Infinity), { width: 320, height: 180 });
+  });
+});
+
+describe('quality hints', () => {
+  it('low adds vq=small and suggests small; auto adds nothing', () => {
+    assert.deepEqual(qualityPlayerVars('low'), { vq: 'small' });
+    assert.equal(suggestedQualityFor('low'), 'small');
+    assert.deepEqual(qualityPlayerVars('auto'), {});
+    assert.equal(suggestedQualityFor('auto'), undefined);
   });
 });
 

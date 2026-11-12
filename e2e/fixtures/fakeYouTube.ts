@@ -59,6 +59,10 @@ export interface FakeYouTubeControl extends Required<FakeYouTubeOptions> {
   probes: Record<string, 'ok' | 'failed'>;
   /** Every `setPlaybackQuality(q)` call, in order. */
   qualityCalls: string[];
+  /** The `vq` player variable of every player created (`null` when absent). */
+  vqVars: (string | null)[];
+  /** The `suggestedQuality` argument of every `loadVideoById` / `cueVideoById` (`null` when absent). */
+  suggestedQualities: (string | null)[];
   instances: FakePlayer[];
   /** Every video id a player was created with, loaded or cued, in order. */
   loaded: string[];
@@ -95,11 +99,14 @@ export function installFakeYouTubeApi(): void {
   ctl.lateErrorOnSwitch = !!ctl.lateErrorOnSwitch;
   ctl.probes = {};
   ctl.qualityCalls = [];
+  ctl.vqVars = [];
+  ctl.suggestedQualities = [];
   ctl.quality = ctl.quality || 'tiny';
 
   function Player(this: FakePlayer & Record<string, unknown>, el: HTMLElement, opts: PlayerOptions) {
     const self = this;
     let state = -1;
+    ctl.vqVars.push(opts.playerVars && typeof opts.playerVars.vq === 'string' ? opts.playerVars.vq : null);
     let time = (opts.playerVars && Number(opts.playerVars.start)) || 0;
     let videoId = opts.videoId;
     /** What the player has "delivered" about its video so far (`getVideoData`). */
@@ -136,7 +143,8 @@ export function installFakeYouTubeApi(): void {
       id && typeof id === 'object'
         ? [String((id as { videoId: string }).videoId), Number((id as { startSeconds?: number }).startSeconds) || 0]
         : [String(id), Number(startSeconds) || 0];
-    self.loadVideoById = (id: unknown, startSeconds?: number) => {
+    self.loadVideoById = (id: unknown, startSeconds?: number, suggestedQuality?: unknown) => {
+      ctl.suggestedQualities.push(typeof suggestedQuality === 'string' ? suggestedQuality : null);
       const previous = videoId;
       [videoId, time] = readArgs(id, startSeconds);
       ctl.loaded.push(videoId);
@@ -158,7 +166,8 @@ export function installFakeYouTubeApi(): void {
       }
       takeOn();
     };
-    self.cueVideoById = (id: unknown, startSeconds?: number) => {
+    self.cueVideoById = (id: unknown, startSeconds?: number, suggestedQuality?: unknown) => {
+      ctl.suggestedQualities.push(typeof suggestedQuality === 'string' ? suggestedQuality : null);
       [videoId, time] = readArgs(id, startSeconds);
       reportedVideoId = videoId;
       ctl.loaded.push(videoId);

@@ -50,6 +50,23 @@ export function hiddenPlayerCssSize(mode: StreamQualityMode, devicePixelRatio: n
   };
 }
 
+/**
+ * Extra hints of the low mode, tried after the box size and `setPlaybackQuality('small')` both left a
+ * phone on `large` (91x51 css, dpr 3.5): the undocumented player variable `vq`, and the deprecated
+ * `suggestedQuality` argument of `loadVideoById` / `cueVideoById`. YouTube may ignore both.
+ */
+export const LOW_QUALITY_HINT = 'small';
+
+/** Player variables the mode adds when the player is created (`low`: `vq=small`). */
+export function qualityPlayerVars(mode: StreamQualityMode): Record<string, string> {
+  return mode === 'low' ? { vq: LOW_QUALITY_HINT } : {};
+}
+
+/** The `suggestedQuality` argument for `loadVideoById` / `cueVideoById` (`auto`: none). */
+export function suggestedQualityFor(mode: StreamQualityMode): string | undefined {
+  return mode === 'low' ? LOW_QUALITY_HINT : undefined;
+}
+
 const ABOVE_TARGET = new Set(['medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160', 'highres']);
 
 /** Whether a reported quality is above 240p (`small`), the target of the low mode. */
