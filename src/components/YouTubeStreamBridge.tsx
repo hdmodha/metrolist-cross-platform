@@ -2,7 +2,13 @@ import React from 'react';
 import { STREAM_ERROR_API_UNAVAILABLE } from '../player/effectPolicies';
 import { appActivity, positionPollIntervalMs } from '../player/appActivity';
 import type { StreamStatus } from '../player/playerCore';
-import { hiddenPlayerCssSize, isAboveTarget, type StreamQualityMode } from '../player/streamQuality';
+import {
+  hiddenPlayerCssSize,
+  isAboveTarget,
+  qualityPlayerVars,
+  suggestedQualityFor,
+  type StreamQualityMode,
+} from '../player/streamQuality';
 
 /*
  * Stream status reported to the player core:
@@ -51,6 +57,8 @@ export interface StreamQualityDetails {
   dpr: number;
   /** `setPlaybackQuality('small')` was called for this video (low mode only). */
   asked: boolean;
+  /** The player was created with `vq=small` and videos are loaded with `suggestedQuality` (low mode). */
+  hinted: boolean;
 }
 
 declare global {
@@ -77,8 +85,8 @@ declare global {
 }
 
 interface YTPlayerInstance {
-  loadVideoById: (videoId: string, startSeconds?: number) => void;
-  cueVideoById: (videoId: string, startSeconds?: number) => void;
+  loadVideoById: (videoId: string, startSeconds?: number, suggestedQuality?: string) => void;
+  cueVideoById: (videoId: string, startSeconds?: number, suggestedQuality?: string) => void;
   playVideo: () => void;
   pauseVideo: () => void;
   seekTo: (seconds: number, allowSeekAhead: boolean) => void;
@@ -215,6 +223,18 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
   const boxRef = React.useRef({ mode: qualityMode, width: hiddenSize.width, height: hiddenSize.height, dpr });
   boxRef.current = { mode: qualityMode, width: hiddenSize.width, height: hiddenSize.height, dpr };
 
+  /** Loads (plays) or cues a video; in low mode with `suggestedQuality: 'small'` (YouTube may ignore it). */
+  const loadVideo = React.useCallback((player: YTPlayerInstance, videoId: string, seconds: number) => {
+    const suggested = suggestedQualityFor(boxRef.current.mode);
+    if (suggested) player.loadVideoById(videoId, seconds, suggested);
+    else player.loadVideoById(videoId, seconds);
+  }, []);
+  const cueVideo = React.useCallback((player: YTPlayerInstance, videoId: string, seconds: number) => {
+    const suggested = suggestedQualityFor(boxRef.current.mode);
+    if (suggested) player.cueVideoById(videoId, seconds, suggested);
+    else player.cueVideoById(videoId, seconds);
+  }, []);
+
   /** Low mode: asks the player for `small` (documented as a no-op, so the log shows whether it helps). */
   const askForSmall = React.useCallback((player: YTPlayerInstance | null | undefined, videoId: string, reported: string) => {
     if (boxRef.current.mode !== 'low' || !player || typeof player.setPlaybackQuality !== 'function') return;
@@ -250,6 +270,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
           height,
           dpr: ratio,
           asked: askedVideosRef.current.has(videoId),
+          hinted: mode === 'low',
         });
       } catch {
         // a player that is being torn down
@@ -310,7 +331,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
       const state = player.getPlayerState();
       const idle = state === YT_STATE.UNSTARTED || state === YT_STATE.CUED;
       if (idle && !latest.current.isPlaying) {
-        player.cueVideoById(loadedVideoIdRef.current, seconds);
+        cueVideo(player, loadedVideoIdRef.current, seconds);
       } else {
         player.seekTo(seconds, true);
         if (latest.current.isPlaying) player.playVideo();
@@ -353,6 +374,7 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
             modestbranding: 1,
             rel: 0,
             playsinline: 1,
+            ...qualityPlayerVars(boxRef.current.mode),
           };
           const startSeconds = Math.floor(Math.max(0, latest.current.initialPositionMs) / 1000);
           if (startSeconds > 0) playerVars.start = startSeconds;
@@ -377,14 +399,14 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
                   const wanted = latest.current.videoId;
                   if (wanted !== loadedVideoIdRef.current) {
                     loadedVideoIdRef.current = wanted;
-                    if (latest.current.isPlaying) ev.target.loadVideoById(wanted, 0);
-                    else ev.target.cueVideoById(wanted, 0);
+                    if (latest.current.isPlaying) loadVideo(ev.target, wanted, 0);
+                    else cueVideo(ev.target, wanted, 0);
                   } else if (latest.current.isPlaying) {
                     ev.target.playVideo();
                   } else if (autoplay) {
                     // Paused while the player was still getting ready: cueing cancels the autoplay it
                     // was created with (it would start the song anyway, and look like an external play)
-                    ev.target.cueVideoById(wanted, startSeconds);
+                    cueVideo(ev.target, wanted, startSeconds);
                   }
                   const pendingSeek = pendingSeekRef.current;
                   if (pendingSeek) {
@@ -492,10 +514,10 @@ export const YouTubeStreamBridge: React.FC<YouTubeStreamBridgeProps> = (props) =
     try {
       if (latest.current.isPlaying) {
         latest.current.onStatusChange('loading');
-        player.loadVideoById(videoId, 0);
+        loadVideo(player, videoId, 0);
         armStartWatchdog();
       } else {
-        player.cueVideoById(videoId, 0);
+        cueVideo(player, videoId, 0);
       }
     } catch {
       latest.current.onError(5, videoId);

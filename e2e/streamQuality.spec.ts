@@ -13,6 +13,12 @@ async function hostBox(app: MetrolistApp): Promise<{ width: number; height: numb
 const qualityCalls = (app: MetrolistApp) =>
   app.page.evaluate(() => (window as unknown as { __yt: { qualityCalls: string[] } }).__yt.qualityCalls);
 
+const hints = (app: MetrolistApp) =>
+  app.page.evaluate(() => {
+    const yt = (window as unknown as { __yt: { vqVars: (string | null)[]; suggestedQualities: (string | null)[] } }).__yt;
+    return { vq: yt.vqVars, suggested: yt.suggestedQualities };
+  });
+
 const dpr = (app: MetrolistApp) => app.page.evaluate(() => window.devicePixelRatio);
 
 async function openDebugLog(app: MetrolistApp) {
@@ -38,9 +44,15 @@ test.describe('hidden player video quality', () => {
     expect(calls.every((q) => q === 'small')).toBe(true);
     expect(calls.length).toBeLessThanOrEqual(2); // once when ready, once for the reported `large`
 
+    // The extra hints: every player is created with vq=small, every load / cue suggests small
+    const first = await hints(app);
+    expect(first.vq.length).toBeGreaterThan(0);
+    expect(first.vq.every((v) => v === 'small')).toBe(true);
+    expect(first.suggested.every((v) => v === 'small')).toBe(true);
+
     const log = await openDebugLog(app);
     await expect(log).toContainText(
-      new RegExp(`stream quality: large \\(video \\S+; mode low, player ${expected.width}x${expected.height} css, dpr ${Math.round(ratio * 100) / 100}, asked small\\)`)
+      new RegExp(`stream quality: large \\(video \\S+; mode low, player ${expected.width}x${expected.height} css, dpr ${Math.round(ratio * 100) / 100}, asked small, hints vq\\+suggestedQuality small\\)`)
     );
   });
 
@@ -56,6 +68,10 @@ test.describe('hidden player video quality', () => {
     await app.searchAndPlayFirst('coldplay yellow');
     expect(await hostBox(app)).toEqual({ width: 1, height: 1 });
     expect(await qualityCalls(app)).toEqual([]);
+    const none = await hints(app);
+    expect(none.vq.length).toBeGreaterThan(0);
+    expect(none.vq.every((v) => v === null)).toBe(true);
+    expect(none.suggested.every((v) => v === null)).toBe(true);
     const log = await openDebugLog(app);
     await expect(log).toContainText(/stream quality: large \(video \S+; mode auto, player 1x1 css, dpr [\d.]+\)/);
   });

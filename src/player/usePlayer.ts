@@ -375,12 +375,12 @@ export function usePlayer() {
         if (qualityLoggedRef.current.has(key)) return;
         if (qualityLoggedRef.current.size > 200) qualityLoggedRef.current.clear();
         qualityLoggedRef.current.add(key);
-        const { mode, width, height, dpr, asked } = details;
+        const { mode, width, height, dpr, asked, hinted } = details;
         debugLog.add(
           'player',
           `stream quality: ${quality} (video ${videoId}; mode ${mode}, player ${width}x${height} css, dpr ${Math.round(dpr * 100) / 100}${
             asked ? ', asked small' : mode === 'low' ? ', not asked' : ''
-          })`
+          }${hinted ? ', hints vq+suggestedQuality small' : ''})`
         );
       },
       onExternalPlayPause: (playing: boolean) => {
