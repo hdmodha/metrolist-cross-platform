@@ -20,7 +20,10 @@ test.describe('search', () => {
   test('result rows request the small cover variant, Now Playing the large one', async ({ app, page }) => {
     const images: string[] = [];
     page.on('request', (r) => {
-      if (r.resourceType() === 'image' && r.url().includes('ytimg.com')) images.push(r.url());
+      const requestUrl = r.url();
+      const hostname = new URL(requestUrl).hostname;
+      const isYtimgHost = hostname === 'ytimg.com' || hostname.endsWith('.ytimg.com');
+      if (r.resourceType() === 'image' && isYtimgHost) images.push(requestUrl);
     });
     await app.open();
     await app.goTo('Search');
