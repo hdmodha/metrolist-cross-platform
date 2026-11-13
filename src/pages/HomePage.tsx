@@ -49,7 +49,7 @@ function colorFor(name: string): string {
 const ArtistCard = React.memo(function ArtistCard({ artist }: { artist: ArtistItem }) {
   const { goToArtist } = useAppActions();
   return (
-    <li className="w-32 sm:w-36 short:w-24 lg:w-44 shrink-0 snap-start lg:p-3 rounded-lg lg:hover:bg-white/[0.06] transition-colors">
+    <li className="w-32 sm:w-36 short:w-24 lg:w-44 shrink-0 snap-start lg:p-3 rounded-xl lg:hover:bg-white/5 transition-colors">
       <a
         href={formatRoute({ name: 'search', query: artist.name })}
         onClick={(e) => {
@@ -57,12 +57,12 @@ const ArtistCard = React.memo(function ArtistCard({ artist }: { artist: ArtistIt
           e.preventDefault();
           goToArtist(artist.name);
         }}
-        className="block rounded-md"
+        className="block rounded-xl press"
       >
         {artist.coverUrl ? (
-          <img src={artist.coverUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full aspect-square rounded-full object-cover bg-zinc-800 shadow-lg shadow-black/40" />
+          <img src={artist.coverUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full aspect-square rounded-full object-cover bg-(--raised-solid)" />
         ) : (
-          <span aria-hidden="true" className={`flex w-full aspect-square rounded-full bg-gradient-to-br ${colorFor(artist.name)} items-center justify-center text-4xl short:text-2xl font-display font-extrabold text-white/95 shadow-lg shadow-black/40`}>
+          <span aria-hidden="true" className={`flex w-full aspect-square rounded-full bg-gradient-to-br ${colorFor(artist.name)} items-center justify-center text-4xl short:text-2xl font-display font-bold text-white/95`}>
             {artist.name.slice(0, 1)}
           </span>
         )}
@@ -108,7 +108,7 @@ export const HomePage = React.memo(function HomePage({
 
   return (
     <div className="space-y-8 short:space-y-6">
-      <h1 className="text-[28px] short:text-2xl lg:text-4xl font-extrabold tracking-tight text-white">{greeting}</h1>
+      <h1 className="text-[28px] short:text-2xl lg:text-[32px] font-bold tracking-tight text-white">{greeting}</h1>
 
       {recentTracks.length > 0 && (
         <Shelf title="Recently played" memoryId="recent">

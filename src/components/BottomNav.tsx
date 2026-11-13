@@ -29,11 +29,11 @@ export const BottomNav = React.memo(function BottomNav({ route }: { route: Route
             to={tabTarget(memory, route, tab)}
             tab={tab}
             current={current}
-            className={`flex flex-col short:flex-row items-center justify-center gap-1 short:gap-2 text-[11px] short:text-xs font-medium transition-colors ${
-              current ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+            className={`flex flex-col short:flex-row items-center justify-center gap-1 short:gap-2 text-[11px] short:text-xs font-medium ${
+              current ? 'text-white' : 'text-zinc-400 hover:text-white'
             }`}
           >
-            <Icon className="w-6 h-6 short:w-5 short:h-5" strokeWidth={current ? 2.4 : 1.8} aria-hidden="true" />
+            <Icon className="tab-icon w-6 h-6 short:w-5 short:h-5" strokeWidth={current ? 2.4 : 1.8} aria-hidden="true" />
             <span>{label}</span>
           </NavLink>
         );

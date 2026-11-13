@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { EllipsisVertical } from 'lucide-react';
+import { EXIT_MS, usePresence } from '../app/usePresence';
 import { nextMenuIndex, placeMenu } from '../utils/menuNavigation';
 
 export interface TrackMenuItem {
@@ -46,9 +47,11 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
   const itemRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const [menuId] = React.useState(() => `track-menu-${++menuCounter}`);
 
+  // The menu stays drawn (inert) while it animates out; `open` stays the truth for logic
+  const presence = usePresence(open, EXIT_MS.pop);
+
   const close = React.useCallback((returnFocus: boolean) => {
     setOpen(false);
-    setPosition(null);
     if (returnFocus) triggerRef.current?.focus();
   }, []);
 
@@ -145,11 +148,11 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
           else setOpen(true);
         }}
         onKeyDown={onTriggerKeyDown}
-        className={`tap-target inline-flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0 ${className}`}
+        className={`tap-target inline-flex items-center justify-center rounded-full text-zinc-400 hover:text-white hover:bg-white/8 cursor-pointer shrink-0 ${className}`}
       >
         <EllipsisVertical className="w-[18px] h-[18px]" />
       </button>
-      {open &&
+      {presence.render &&
         createPortal(
           <div
             ref={menuRef}
@@ -158,12 +161,14 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
             aria-label={`Options for ${trackTitle}`}
             onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}
+            data-state={presence.state}
+            inert={!open}
             style={
               position
                 ? { top: position.top, left: position.left, maxHeight: position.maxHeight }
                 : { top: 0, left: 0, opacity: 0 }
             }
-            className="fixed z-[80] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-[#1f1f23] shadow-2xl shadow-black/60 py-1.5"
+            className="pop fixed z-[80] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-xl bg-(--raised-solid) shadow-2xl shadow-black/60 py-2"
           >
             {items.map((item, idx) => (
               <button
@@ -178,7 +183,7 @@ export const TrackMenu = React.memo(function TrackMenu({ trackTitle, items, clas
                   close(true);
                   item.onSelect();
                 }}
-                className="w-full min-h-11 flex items-center gap-3 px-4 py-2.5 text-left text-sm text-zinc-100 hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none cursor-pointer"
+                className="w-full min-h-11 flex items-center gap-3 px-4 py-2.5 text-left text-sm text-zinc-100 hover:bg-white/8 focus-visible:bg-white/8 focus-visible:outline-none cursor-pointer"
               >
                 <span className="text-zinc-400 shrink-0" aria-hidden="true">
                   {item.icon}

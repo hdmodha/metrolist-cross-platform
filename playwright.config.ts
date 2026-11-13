@@ -27,6 +27,8 @@ export default defineConfig({
     baseURL: `http://localhost:${SERVER_PORT}`,
     trace: 'on-first-retry',
     serviceWorkers: 'block',
+    // Animation would only slow the suite down; `motion.spec.ts` turns it back on
+    reducedMotion: 'reduce',
   },
   webServer: [
     {

@@ -11,6 +11,7 @@ import {
 import { backAs, formatRoute, historyFlags, navigate, type HistoryFlags, type NavigationIntent, type Route } from './app/router';
 import { planTabPress, type TabName } from './app/tabMemory';
 import { useNowPlaying } from './app/useNowPlaying';
+import { EXIT_MS, usePresence } from './app/usePresence';
 import { useRoute } from './app/useRoute';
 import { BottomNav } from './components/BottomNav';
 import { MiniPlayer } from './components/MiniPlayer';
@@ -51,6 +52,8 @@ export default function App() {
   useNavigationMemory(route);
   const nowPlaying = useNowPlaying(activeTrack !== null);
   const [queueFirst, setQueueFirst] = React.useState(false);
+  // Now Playing stays drawn while it slides out; every rule below keeps using the real `nowPlaying.isOpen`
+  const nowPlayingView = usePresence(nowPlaying.isOpen && activeTrack !== null, EXIT_MS.sheet);
 
   // Once per page load: the start-up time for the debug log, and the silent early load of the
   // YouTube API while nothing is active (a track that is active makes the bridge load it)
@@ -184,7 +187,12 @@ export default function App() {
         <div inert={nowPlaying.isOpen}>
           <Sidebar route={route} likedCount={likedTracks.length} downloadedCount={downloadedTracks.length} />
 
-          <main className="page lg:ml-64 min-w-0">{page}</main>
+          <main className="page lg:ml-64 min-w-0">
+            {/* Keyed by the page: the new one fades in and rises; the wrapper ends with no transform */}
+            <div key={route.name} data-page-transition className="page-enter">
+              {page}
+            </div>
+          </main>
 
           <div
             data-chrome="bottom"
@@ -233,8 +241,9 @@ export default function App() {
           )}
         </div>
 
-        {nowPlaying.isOpen && activeTrack && (
+        {nowPlayingView.render && activeTrack && (
           <NowPlaying
+            state={nowPlayingView.state}
             track={activeTrack}
             clock={clock}
             queue={queueTracks}

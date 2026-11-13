@@ -40,18 +40,18 @@ export const SongRow = React.memo(function SongRow({ track, isCurrent, isPlaying
     [track, liked, downloaded, actions]
   );
   return (
-    <li className="song-row group flex items-center gap-1 rounded-md hover:bg-white/[0.06] focus-within:bg-white/[0.06] transition-colors">
+    <li className="song-row group flex items-center gap-1 rounded-xl hover:bg-white/5 focus-within:bg-white/5 transition-colors">
       <button
         type="button"
         onClick={() => onPlay(track)}
         aria-label={songButtonLabel(track, isPlaying, unavailableReason)}
         title={unavailableReason ? songButtonLabel(track, isPlaying, unavailableReason) : undefined}
         aria-current={isCurrent ? 'true' : undefined}
-        className="flex flex-1 min-w-0 items-center gap-3 py-2 pl-2 text-left rounded-md cursor-pointer"
+        className="flex flex-1 min-w-0 items-center gap-3 py-2 pl-2 text-left rounded-xl cursor-pointer"
       >
         <Artwork
           src={track.coverUrl}
-          className={`w-12 h-12 short:w-10 short:h-10 rounded shrink-0 ${unavailableReason ? 'opacity-50' : ''}`}
+          className={`w-12 h-12 short:w-10 short:h-10 rounded-lg shrink-0 ${unavailableReason ? 'opacity-50' : ''}`}
         />
         <span className={`min-w-0 flex-1 ${unavailableReason ? 'opacity-50' : ''}`}>
           <span className={`flex items-center gap-2 min-w-0 ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
@@ -61,7 +61,7 @@ export const SongRow = React.memo(function SongRow({ track, isCurrent, isPlaying
           <span className="block truncate text-[13px] text-zinc-400 leading-snug mt-0.5">{track.artist}</span>
         </span>
         {unavailableReason && (
-          <span className="song-unavailable shrink-0 rounded-full border border-white/20 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
+          <span className="song-unavailable shrink-0 rounded-full bg-white/8 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
             Unavailable
           </span>
         )}

@@ -64,7 +64,7 @@ export const DebugPage = React.memo(function DebugPage() {
         <ChevronLeft className="w-4 h-4" aria-hidden="true" />
         Library
       </NavLink>
-      <h1 className="text-[28px] short:text-2xl lg:text-4xl font-extrabold tracking-tight text-white">Debug log</h1>
+      <h1 className="text-[28px] short:text-2xl lg:text-[32px] font-bold tracking-tight text-white">Debug log</h1>
       <p className="text-sm text-zinc-400 max-w-2xl">
         Metrolist {APP_VERSION} · {plugin ? `${plugin.platform} app` : 'web / desktop'} · the last {oldestFirst.length} player, page and
         plugin events, newest first. Kept in memory only; nothing is sent anywhere.

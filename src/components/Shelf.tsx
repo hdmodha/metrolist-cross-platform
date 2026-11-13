@@ -23,13 +23,13 @@ export function Shelf({ title, eyebrow, busy = false, memoryId, children }: Shel
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     list.scrollBy({ left: direction * list.clientWidth * 0.8, behavior: reduce ? 'auto' : 'smooth' });
   };
-  const arrow = 'tap-target hidden lg:inline-flex w-8 h-8 items-center justify-center rounded-full bg-white/[0.07] hover:bg-white/15 text-zinc-300 hover:text-white cursor-pointer';
+  const arrow = 'tap-target hidden lg:inline-flex w-8 h-8 items-center justify-center rounded-full bg-white/8 text-zinc-400 hover:text-white cursor-pointer';
   return (
     <section aria-labelledby={id} aria-busy={busy} className="min-w-0">
       <div className="flex items-end justify-between gap-3 mb-3 lg:mb-1">
         <div className="min-w-0">
           {eyebrow && <p className="text-xs font-medium text-zinc-400 truncate">{eyebrow}</p>}
-          <h2 id={id} className="text-xl short:text-lg lg:text-2xl font-bold tracking-tight text-white truncate">
+          <h2 id={id} className="text-xl short:text-lg font-bold tracking-tight text-white truncate">
             {title}
           </h2>
         </div>
