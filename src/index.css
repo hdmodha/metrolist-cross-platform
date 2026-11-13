@@ -526,12 +526,21 @@ body {
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important; /* no transition at all: a 0.01 ms one would still leave a frame of the old value */
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+  .sheet[data-state],
+  .scrim[data-state],
+  .pop[data-state],
+  .toast[data-state],
+  .page-enter,
+  .enter-up,
+  .fade-in,
+  .heart-pop,
+  .skeleton,
   .playing-bars > span {
-    animation: none;
+    animation: none !important;
   }
   .animate-spin {
     /* A loading indicator must still read as "busy": slow it down instead of freezing it */

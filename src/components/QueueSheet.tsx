@@ -102,7 +102,7 @@ export const QueueSheet = React.memo(function QueueSheet({
       data-no-swipe
       data-state={state}
       inert={state === 'closed'}
-      className="sheet queue absolute inset-x-0 bottom-0 z-10 h-[88%] short:h-full flex flex-col rounded-t-[20px] short:rounded-none bg-(--raised-solid) shadow-[0_-12px_40px_rgba(0,0,0,0.5)] pb-[env(safe-area-inset-bottom)] lg:static lg:z-auto lg:h-auto lg:w-[24rem] lg:shrink-0 lg:my-6 lg:rounded-[20px] lg:shadow-none lg:pb-0 lg:bg-(--surface)"
+      className="sheet queue absolute inset-x-0 bottom-0 z-10 h-[88%] short:h-auto short:top-[calc(2.75rem+env(safe-area-inset-top))] flex flex-col rounded-t-[20px] bg-(--raised-solid) shadow-[0_-12px_40px_rgba(0,0,0,0.5)] pb-[env(safe-area-inset-bottom)] lg:static lg:z-auto lg:h-auto lg:w-[24rem] lg:shrink-0 lg:my-6 lg:rounded-[20px] lg:shadow-none lg:pb-0 lg:bg-(--surface)"
     >
       <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))]">
         <h2 className="text-lg font-bold text-white">Queue</h2>

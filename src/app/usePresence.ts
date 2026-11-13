@@ -30,24 +30,32 @@ function prefersReducedMotion(): boolean {
 }
 
 /**
- * Keeps an element mounted while it animates out. `open` stays the one source of truth for logic
- * (history, focus, `inert`): only the visual unmount waits. Use `state` as `data-state`.
+ * Keeps an element drawn while it animates out. `render` says whether to draw it, `state` goes into
+ * `data-state` (the CSS animates on it). Logic never waits for this: callers keep using `open`.
+ *
+ * No state changes while opening, and none at all with reduced motion: "was open" is a ref set
+ * during render, and the only re-render the hook asks for is the one that removes the element
+ * when the exit animation is over. (A state copy of `open`, updated in an effect, re-rendered the
+ * owner once more after every change; the render probes of the browser suite count that.)
  */
 export function usePresence(open: boolean, exitMs: number): { render: boolean; state: PresenceState } {
-  const [mounted, setMounted] = React.useState(open);
+  const [, removeNow] = React.useReducer((n: number) => n + 1, 0);
+  const mountedRef = React.useRef(open);
+  if (open) mountedRef.current = true;
   const reduced = prefersReducedMotion();
   React.useEffect(() => {
-    if (open) {
-      setMounted(true);
-      return;
-    }
+    if (open || !mountedRef.current) return;
     const delay = exitDelayMs(prefersReducedMotion(), exitMs);
     if (delay === 0) {
-      setMounted(false);
+      // Reduced motion: `presenceView` already stopped drawing it
+      mountedRef.current = false;
       return;
     }
-    const timer = window.setTimeout(() => setMounted(false), delay);
+    const timer = window.setTimeout(() => {
+      mountedRef.current = false;
+      removeNow();
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [open, exitMs]);
-  return presenceView(open, mounted, reduced);
+  return presenceView(open, mountedRef.current, reduced);
 }
